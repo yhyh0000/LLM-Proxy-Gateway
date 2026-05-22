@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  llm-proxy:
+    build: .
+    container_name: llm-proxy
+    restart: unless-stopped
+    ports:
+      - "8800:8800"
+    volumes:
+      - .:/app                    # 整个目录挂载，文件都在同级
+    environment:
+      - TZ=Asia/Shanghai

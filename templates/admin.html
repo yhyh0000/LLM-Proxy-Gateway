@@ -1,0 +1,696 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>API 代理 · 管理面板</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root {
+            --primary: #4285F4;
+            --primary-light: #EDF2FF;
+            --primary-soft: #DBE7FF;
+            --bg: #FAFBFF;
+            --card: #FFFFFF;
+            --text: #1C233D;
+            --text-2: #5E6985;
+            --text-3: #959DB8;
+            --border: #E7EBFA;
+            --radius: 16px;
+            --radius-sm: 10px;
+            --shadow: 0 6px 20px rgba(40, 50, 70, 0.05);
+            --shadow-hover: 0 10px 28px rgba(40, 50, 70, 0.1);
+            --green: #4caf50;
+            --yellow: #ff9800;
+            --red: #f44336;
+            --transition: all 0.28s ease;
+        }
+        html.dark {
+            --bg: #12141D;
+            --card: #1C233D;
+            --text: #F0F2FF;
+            --text-2: #C5CEE7;
+            --text-3: #8A94B3;
+            --border: #2B3249;
+        }
+        body {
+            background: var(--bg);
+            font-family: 'SF Pro Display', 'Inter', system-ui, -apple-system, sans-serif;
+            padding: 24px;
+            color: var(--text);
+            min-height: 100vh;
+            transition: var(--transition);
+            line-height: 1.55;
+        }
+        .container {
+            max-width: 1380px;
+            margin: 0 auto;
+        }
+        .page-head {
+            margin-bottom: 24px;
+        }
+        .page-title {
+            font-size: 24px;
+            font-weight: 700;
+            margin-bottom: 6px;
+        }
+        .page-desc {
+            color: var(--text-2);
+            font-size: 14px;
+        }
+        .section-title {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .card {
+            background: var(--card);
+            border-radius: var(--radius);
+            padding: 20px;
+            box-shadow: var(--shadow);
+            border: 1px solid var(--border);
+            transition: var(--transition);
+            margin-bottom: 20px;
+        }
+        .card:hover {
+            box-shadow: var(--shadow-hover);
+        }
+
+        /* 接入接口美化 */
+        .api-wrap {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 14px;
+            margin-bottom: 16px;
+        }
+        .api-item {
+            padding: 14px;
+            background: var(--primary-light);
+            border-radius: var(--radius-sm);
+        }
+        .api-path {
+            font-weight: 600;
+            color: var(--primary);
+            font-size: 14px;
+            margin-bottom: 4px;
+        }
+        .api-desc {
+            font-size: 12px;
+            color: var(--text-2);
+        }
+        .base-url-info {
+            font-size: 13px;
+            color: var(--text-3);
+            padding-top: 12px;
+            border-top: 1px dashed var(--border);
+        }
+
+        /* 状态卡片 */
+        .status-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 16px;
+            margin-bottom: 20px;
+        }
+
+        /* 按钮 */
+        .btn {
+            background: var(--primary);
+            color: #fff;
+            border: none;
+            border-radius: var(--radius-sm);
+            padding: 8px 16px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: var(--transition);
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(66,133,244,0.2);
+        }
+        .btn-outline {
+            background: transparent;
+            color: var(--primary);
+            border: 1px solid var(--primary);
+            box-shadow: none;
+        }
+        .btn-outline:hover {
+            background: var(--primary-light);
+        }
+        .btn-danger { background: var(--red); }
+        .btn-sm { padding: 5px 12px; font-size: 13px; }
+        .btn-group {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 16px;
+            flex-wrap: wrap;
+        }
+
+        /* 表格 + 超长文本美化 */
+        .table-box { overflow-x: auto; }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        th, td {
+            padding: 12px 10px;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+            font-size: 14px;
+        }
+        th {
+            color: var(--text-2);
+            font-weight: 600;
+            background: rgba(0,0,0,0.02);
+        }
+        tr:hover { background: rgba(66,133,244,0.03); }
+        
+        /* 超长文本自动省略 + hover 浮层显示完整 */
+        .text-ellipsis {
+            max-width: 220px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            position: relative;
+            cursor: default;
+        }
+        .text-ellipsis:hover::after {
+            content: attr(data-full);
+            position: absolute;
+            bottom: 100%;
+            left: 0;
+            background: #252a37;
+            color: #fff;
+            padding: 6px 10px;
+            border-radius: 6px;
+            font-size: 12px;
+            white-space: pre-wrap;
+            z-index: 99;
+            width: max-content;
+            max-width: 400px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.15);
+        }
+
+        .status-dot {
+            display: inline-block;
+            width: 9px;
+            height: 9px;
+            border-radius: 50%;
+            margin-right: 5px;
+        }
+
+        /* 日志 */
+        .logs-box {
+            background: var(--card);
+            border-radius: var(--radius);
+            border: 1px solid var(--border);
+            padding: 16px;
+            max-height: 280px;
+            overflow-y: auto;
+            font-size: 13px;
+            line-height: 1.6;
+        }
+        .pagination {
+            display: flex;
+            gap: 6px;
+            justify-content: center;
+            margin-top: 12px;
+            flex-wrap: wrap;
+        }
+
+        /* 模态框 */
+        .modal {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.45);
+            backdrop-filter: blur(3px);
+            align-items: center;
+            justify-content: center;
+            z-index: 100;
+        }
+        .modal-content {
+            background: var(--card);
+            width: 92%;
+            max-width: 520px;
+            border-radius: var(--radius);
+            padding: 24px;
+            border: 1px solid var(--border);
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+        .modal input, .modal select {
+            width: 100%;
+            padding: 10px;
+            margin: 8px 0;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            color: var(--text);
+            font-size: 14px;
+        }
+        .modal input:focus {
+            outline: none;
+            border-color: var(--primary);
+        }
+        .loading {
+            width: 16px;
+            height: 16px;
+            border: 2px solid #fff;
+            border-top-color: var(--primary);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .toast {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            background: var(--card);
+            padding: 12px 20px;
+            border-radius: var(--radius-sm);
+            box-shadow: var(--shadow-hover);
+            border: 1px solid var(--border);
+            display: none;
+            z-index: 999;
+            font-size: 14px;
+        }
+        .model-checkboxes {
+            max-height: 140px;
+            overflow-y: auto;
+            margin: 8px 0;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        @media (max-width: 768px) {
+            body { padding: 16px; }
+            .api-wrap { grid-template-columns: 1fr; }
+            th, td { padding: 10px 6px; font-size: 13px; }
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="page-head">
+        <h1 class="page-title">API 代理管理面板</h1>
+        <p class="page-desc">v3.1 · 运行时间: <span id="uptime">--</span></p>
+    </div>
+
+    <!-- 接入接口 -->
+    <div class="card">
+        <h2 class="section-title">接入接口</h2>
+        <div class="api-wrap">
+            <div class="api-item">
+                <div class="api-path">/v1/chat/completions</div>
+                <div class="api-desc">聊天补全 OpenAI 兼容</div>
+            </div>
+            <div class="api-item">
+                <div class="api-path">/v1/models</div>
+                <div class="api-desc">获取模型列表</div>
+            </div>
+            <div class="api-item">
+                <div class="api-path">/health</div>
+                <div class="api-desc">服务健康状态检测</div>
+            </div>
+            <div class="api-item">
+                <div class="api-path">/admin</div>
+                <div class="api-desc">后台管理面板</div>
+            </div>
+        </div>
+        <div class="base-url-info">基础访问地址：<span id="baseURL"></span></div>
+    </div>
+
+    <!-- 状态卡片 -->
+    <div class="status-grid" id="statusCards"></div>
+
+    <!-- 🔴 改名：密钥采集源 + 超长URL美化 -->
+    <div class="card">
+        <h2 class="section-title">密钥采集源</h2>
+        <div class="btn-group">
+            <button class="btn" onclick="openSourceModal()">+ 添加采集源</button>
+        </div>
+        <div class="table-box">
+            <table>
+                <thead>
+                    <tr>
+                        <th>名称</th>
+                        <th>采集地址</th>
+                        <th>目标模型</th>
+                        <th>API 端点</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody id="sourcesTable"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- 供应商 -->
+    <div class="card">
+        <h2 class="section-title">供应商列表</h2>
+        <div class="btn-group">
+            <button class="btn" onclick="openAddModal()">+ 添加供应商</button>
+            <button class="btn btn-outline" onclick="refreshAll()">刷新数据</button>
+        </div>
+        <div class="table-box">
+            <table>
+                <thead>
+                    <tr>
+                        <th>名称</th>
+                        <th>优先级</th>
+                        <th>响应延迟</th>
+                        <th>运行状态</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody id="providerTable"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- 日志 -->
+    <div class="card">
+        <h2 class="section-title">最近运行日志</h2>
+        <div class="logs-box" id="logs"></div>
+        <div class="pagination" id="logPagination"></div>
+    </div>
+</div>
+
+<!-- 模态框 -->
+<div class="modal" id="providerModal">
+    <div class="modal-content">
+        <h2 id="modalTitle" style="margin-bottom:16px;font-size:18px;">添加供应商</h2>
+        <input type="text" id="provName" placeholder="供应商名称">
+        <input type="text" id="provEndpoint" placeholder="API端点 例：https://api.example.com/v1">
+        <input type="password" id="provKey" placeholder="API Key">
+        <button class="btn" onclick="detectModels()" id="detectBtn">探测可用模型</button>
+        <div id="detectResult"></div>
+        <div class="model-checkboxes" id="modelCheckboxes"></div>
+        <select id="provPriority">
+            <option value="1">P1 - 官方免费</option>
+            <option value="2">P2 - 付费兜底</option>
+        </select>
+        <div style="display:flex;gap:10px;margin-top:20px;justify-content:flex-end;">
+            <button class="btn" onclick="saveProvider()">保存</button>
+            <button class="btn btn-outline" onclick="closeModal()">取消</button>
+        </div>
+        <input type="hidden" id="editHash">
+    </div>
+</div>
+
+<div class="modal" id="sourceModal">
+    <div class="modal-content">
+        <h2 style="margin-bottom:16px;font-size:18px;">添加采集源</h2>
+        <input type="text" id="sourceName" placeholder="采集源名称">
+        <input type="text" id="sourceUrl" placeholder="密钥采集接口URL">
+        <input type="text" id="sourceModels" placeholder="目标模型，多个逗号分隔">
+        <input type="text" id="sourceEndpoint" placeholder="API 调用端点">
+        <div style="display:flex;gap:10px;margin-top:20px;justify-content:flex-end;">
+            <button class="btn" onclick="saveSource()">保存</button>
+            <button class="btn btn-outline" onclick="closeSourceModal()">取消</button>
+        </div>
+    </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+let allModels = [];
+let selectedModels = [];
+let currentLogPage = 1;
+const logsPerPage = 50;
+
+function showToast(msg, duration=3000) {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.style.display = 'block';
+    setTimeout(() => t.style.display = 'none', duration);
+}
+
+document.getElementById('baseURL').textContent = window.location.origin;
+
+async function refreshAll() {
+    await Promise.all([loadHealth(), loadSources(), loadProviders(), loadLogs(currentLogPage)]);
+}
+
+async function loadHealth() {
+    const res = await fetch('/health');
+    const data = await res.json();
+    document.getElementById('uptime').textContent = data.uptime;
+
+    let html = '';
+    html += `<div class="card"><div style="font-size:22px;font-weight:700;margin-bottom:4px;">${data.pool_stats.P0}</div><div style="font-size:13px;color:var(--text-2)">P0 中转 Key</div></div>`;
+    html += `<div class="card"><div style="font-size:22px;font-weight:700;margin-bottom:4px;">${data.pool_stats.P1}</div><div style="font-size:13px;color:var(--text-2)">P1 免费 Key</div></div>`;
+    html += `<div class="card"><div style="font-size:22px;font-weight:700;margin-bottom:4px;">${data.pool_stats.P2}</div><div style="font-size:13px;color:var(--text-2)">P2 付费 Key</div></div>`;
+    html += `<div class="card"><div style="font-size:22px;font-weight:700;color:var(--green);margin-bottom:4px;">${data.active}</div><div style="font-size:13px;color:var(--text-2)">活跃可用 Key</div></div>`;
+
+    if (data.active_key) {
+        html += `<div class="card"><div style="font-weight:600;margin-bottom:4px;">当前使用密钥</div><div style="font-size:13px;color:var(--text-2)">${data.active_key.preview} · ${data.active_key.model}</div></div>`;
+    }
+    if (data.backup_key) {
+        html += `<div class="card"><div style="font-weight:600;margin-bottom:4px;">备用密钥</div><div style="font-size:13px;color:var(--text-2)">${data.backup_key.preview} · ${data.backup_key.model}</div></div>`;
+    }
+
+    const crawler = data.crawler;
+    if (crawler.last_update) {
+        const last = new Date(crawler.last_update).toLocaleTimeString();
+        const next = crawler.next_update ? new Date(crawler.next_update).toLocaleTimeString() : '--';
+        html += `<div class="card"><div style="font-weight:600;margin-bottom:4px;">爬虫抓取状态</div><div style="font-size:13px;color:var(--text-2)">上次更新:${last}<br>下次更新:${next}<br>可用密钥:${crawler.key_count}</div></div>`;
+    }
+
+    const stats = data.stats;
+    html += `<div class="card"><div style="font-weight:600;margin-bottom:4px;">请求统计</div><div style="font-size:13px;color:var(--text-2)">总请求:${stats.total_requests}<br>成功率:${(stats.success_rate*100).toFixed(1)}%<br>平均延迟:${stats.avg_latency}s</div></div>`;
+
+    document.getElementById('statusCards').innerHTML = html;
+}
+
+// 🔴 美化：采集源表格（超长URL自动省略 + hover浮层）
+async function loadSources() {
+    const res = await fetch('/api/sources');
+    const sources = await res.json();
+    let html = '';
+    sources.forEach((s, i) => {
+        html += `<tr>
+            <td><strong>${s.name || '未命名'}</strong></td>
+            <td><div class="text-ellipsis" data-full="${s.url}">${s.url}</div></td>
+            <td>${s.target_models.join(', ')}</td>
+            <td><div class="text-ellipsis" data-full="${s.endpoint}">${s.endpoint}</div></td>
+            <td><button class="btn btn-danger btn-sm" onclick="deleteSource(${i})">删除</button></td>
+        </tr>`;
+    });
+    document.getElementById('sourcesTable').innerHTML = html || '<tr><td colspan="5" style="text-align:center;color:var(--text-3)">暂无采集源</td></tr>';
+}
+
+async function loadProviders() {
+    const res = await fetch('/api/providers');
+    const data = await res.json();
+    let html = '';
+    data.forEach(p => {
+        const statusColor = p.status === 'active' ? 'var(--green)' : (p.cooldown > 0 ? 'var(--yellow)' : 'var(--red)');
+        const statusText = p.status === 'active' ? '在线' : (p.cooldown > 0 ? '冷却中' : '已失效');
+        html += `<tr>
+            <td>${p.name || '未命名'}</td>
+            <td>P${p.priority}</td>
+            <td>${p.avg_latency}s</td>
+            <td><span class="status-dot" style="background:${statusColor}"></span>${statusText}</td>
+            <td><button class="btn btn-sm" onclick="editProvider('${p.full_key_hash}')">编辑</button></td>
+        </tr>`;
+    });
+    document.getElementById('providerTable').innerHTML = html || '<tr><td colspan="5" style="text-align:center;color:var(--text-3)">暂无供应商</td></tr>';
+}
+
+async function loadLogs(page) {
+    const res = await fetch(`/api/logs?page=${page}&limit=${logsPerPage}`);
+    const data = await res.json();
+    let html = '';
+    data.logs.forEach(l => {
+        const color = l.level === 'ERROR' ? 'var(--red)' : (l.level === 'WARNING' ? 'var(--yellow)' : 'var(--green)');
+        html += `<div style="color:${color};margin-bottom:3px;">[${l.time.slice(11,19)}] ${l.message}</div>`;
+    });
+    document.getElementById('logs').innerHTML = html || '暂无运行日志';
+
+    let paginationHtml = '';
+    for (let i = 1; i <= data.total_pages; i++) {
+        paginationHtml += `<button class="btn btn-outline btn-sm" onclick="loadLogs(${i})" ${i === page ? 'disabled' : ''}>${i}</button>`;
+    }
+    document.getElementById('logPagination').innerHTML = paginationHtml;
+    currentLogPage = page;
+}
+
+function closeModal() {
+    document.getElementById('providerModal').style.display = 'none';
+}
+
+function openAddModal() {
+    document.getElementById('modalTitle').textContent = '添加供应商';
+    document.getElementById('editHash').value = '';
+    document.getElementById('provName').value = '';
+    document.getElementById('provEndpoint').value = '';
+    document.getElementById('provKey').value = '';
+    document.getElementById('provPriority').value = '1';
+    document.getElementById('detectResult').innerHTML = '';
+    document.getElementById('modelCheckboxes').innerHTML = '';
+    allModels = []; selectedModels = [];
+    document.getElementById('providerModal').style.display = 'flex';
+}
+
+async function detectModels() {
+    const endpoint = document.getElementById('provEndpoint').value.trim();
+    const key = document.getElementById('provKey').value.trim();
+    if (!endpoint || !key) { showToast('请填写接口地址与密钥'); return; }
+    const btn = document.getElementById('detectBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="loading"></span> 探测中';
+    try {
+        const res = await fetch('/api/providers/detect', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({endpoint, api_key: key})
+        });
+        const data = await res.json();
+        if (data.success) {
+            allModels = data.models;
+            document.getElementById('detectResult').innerHTML = `成功探测到 ${allModels.length} 个可用模型`;
+            renderModelCheckboxes();
+        } else {
+            document.getElementById('detectResult').innerHTML = `探测失败：${data.error}`;
+        }
+    } catch(e) { showToast('接口请求异常'); }
+    btn.disabled = false;
+    btn.innerHTML = '探测可用模型';
+}
+
+function renderModelCheckboxes() {
+    let html = '';
+    allModels.forEach(m => {
+        const checked = selectedModels.includes(m) ? 'checked' : '';
+        html += `<label style="cursor:pointer;"><input type="checkbox" value="${m}" ${checked} onchange="updateSelected()"> ${m}</label>`;
+    });
+    document.getElementById('modelCheckboxes').innerHTML = html;
+}
+
+function updateSelected() {
+    const checks = document.querySelectorAll('#modelCheckboxes input:checked');
+    selectedModels = Array.from(checks).map(c => c.value);
+    if (selectedModels.length > 2) {
+        checks[2].checked = false;
+        selectedModels = selectedModels.slice(0,2);
+        showToast('最多仅可选择2个模型');
+    }
+}
+
+async function saveProvider() {
+    const name = document.getElementById('provName').value.trim() || '未命名供应商';
+    const endpoint = document.getElementById('provEndpoint').value.trim();
+    const api_key = document.getElementById('provKey').value.trim();
+    const priority = parseInt(document.getElementById('provPriority').value);
+    const editHash = document.getElementById('editHash').value;
+
+    if (!editHash) {
+        if (!endpoint || !api_key) { showToast('接口地址和密钥不能为空'); return; }
+        if (selectedModels.length === 0) { showToast('请选择至少一个可用模型'); return; }
+    }
+
+    const body = { name, priority };
+    if (endpoint) body.endpoint = endpoint;
+    if (api_key) body.api_key = api_key;
+    if (selectedModels.length > 0) body.selected_models = selectedModels;
+
+    const url = editHash ? `/api/providers/${editHash}` : '/api/providers';
+    const method = editHash ? 'PUT' : 'POST';
+    try {
+        const res = await fetch(url, { method, headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+        if (res.ok) {
+            showToast(editHash ? '供应商修改成功' : '供应商添加成功');
+            closeModal();
+            refreshAll();
+        } else {
+            const err = await res.json();
+            showToast('操作失败：' + err.error);
+        }
+    } catch(e) { showToast('网络请求出错'); }
+}
+
+async function editProvider(hash) {
+    const res = await fetch('/api/providers');
+    const data = await res.json();
+    const p = data.find(d => d.full_key_hash === hash);
+    if (!p) return;
+    document.getElementById('modalTitle').textContent = '编辑供应商';
+    document.getElementById('editHash').value = hash;
+    document.getElementById('provName').value = p.name || '';
+    document.getElementById('provEndpoint').value = p.endpoint || '';
+    document.getElementById('provKey').value = '';
+    document.getElementById('provPriority').value = p.priority;
+    document.getElementById('detectResult').innerHTML = '';
+    allModels = p.verified_models.length ? p.verified_models : p.selected_models;
+    selectedModels = [...allModels];
+    renderModelCheckboxes();
+    document.getElementById('providerModal').style.display = 'flex';
+}
+
+async function deleteProvider(hash) {
+    if (!confirm('确认删除该供应商？')) return;
+    await fetch(`/api/providers/${hash}`, { method: 'DELETE' });
+    showToast('已删除供应商');
+    refreshAll();
+}
+
+function openSourceModal() {
+    document.getElementById('sourceName').value = '';
+    document.getElementById('sourceUrl').value = '';
+    document.getElementById('sourceModels').value = 'deepseek-chat';
+    document.getElementById('sourceEndpoint').value = 'https://aiapiv2.pekpik.com/v1';
+    document.getElementById('sourceModal').style.display = 'flex';
+}
+
+function closeSourceModal() {
+    document.getElementById('sourceModal').style.display = 'none';
+}
+
+async function saveSource() {
+    const url = document.getElementById('sourceUrl').value.trim();
+    if (!url) { showToast('接口URL不能为空'); return; }
+    const body = {
+        url,
+        name: document.getElementById('sourceName').value.trim() || '未命名采集源',
+        target_models: document.getElementById('sourceModels').value.split(',').map(s => s.trim()).filter(Boolean),
+        endpoint: document.getElementById('sourceEndpoint').value.trim() || 'https://aiapiv2.pekpik.com/v1'
+    };
+    try {
+        const res = await fetch('/api/sources', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(body)
+        });
+        if (res.ok) {
+            showToast('采集源添加成功');
+            closeSourceModal();
+            loadSources();
+        } else {
+            const err = await res.json();
+            showToast('添加失败：' + err.error);
+        }
+    } catch(e) { showToast('请求异常'); }
+}
+
+async function deleteSource(index) {
+    if (!confirm('确认删除该采集源？')) return;
+    await fetch(`/api/sources/${index}`, { method: 'DELETE' });
+    showToast('采集源已删除');
+    loadSources();
+}
+
+setInterval(refreshAll, 10000);
+refreshAll();
+</script>
+</body>
+</html>
