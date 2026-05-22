@@ -77,15 +77,15 @@ RETRY_TIMEOUT = 3              # 重试/切换超时
 BACKUP_PROBE_INTERVAL = 5      # 备用Key维护间隔(秒)
 
 # 默认端点
-DEFAULT_P0_ENDPOINT = "https://aiapiv2.pekpik.com/v1"
+DEFAULT_P0_ENDPOINT = "#"
 
 # 数据源文件
 SOURCES_FILE = "sources.json"
 DEFAULT_SOURCES = [
     {
-        "url": "https://ql.suhm.top/files/discord/data/llm_keys.json",
+        "url": "#",
         "target_models": ["deepseek-chat"],
-        "endpoint": "https://aiapiv2.pekpik.com/v1",
+        "endpoint": "#",
         "name": "默认中转站"
     }
 ]
