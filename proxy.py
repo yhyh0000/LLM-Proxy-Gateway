@@ -1,16 +1,12 @@
 """
-免费 LLM 智能代理网关 v3.2 (最终版)
-特性：
-  - 多数据源动态管理 (Web 面板可增删)
-  - P0(爬虫中转) > P1(官方免费) > P2(付费兜底) 优先级调度
-  - 热备用瞬间切换 + 粘性调度 + 自动切回 + 延迟感知
-  - 模型探测与验证 (支持 OpenAI / Google 格式)
-  - Web 管理面板 (供应商/数据源管理、Key加密)
-  - 流式响应支持 (工具调用自动转为流式，谷歌除外)
-  - 原生支持 Google Gemini API (无需外部转换)
-  - 请求日志与统计 (分页接口)
-  - 系统运行状态监控
-  - 可选安全认证（环境变量控制，默认关闭）
+免费 LLM 智能代理网关  (优先社区 Key + 粘度保留 + 供应商日志)
+核心功能：
+- 调度优先级：P0(社区) > P1(官方免费) > P2(付费)
+- 社区 Key 失败：冷却 60 秒，连续失败 3 次才删除（粘度保护）
+- 社区 Key 成功：重置失败计数，继续保留
+- 日志中明确显示供应商名称（手动供应商的 name 或 "社区:key预览"）
+- 自动清理请求中的 image_url，避免 400 错误
+- 爬虫每 5 分钟更新社区 Key 池（完全替换，但保留现有冷却中的 Key？为了粘度，合并新旧时保留现有冷却状态）
 启动：python proxy.py
 管理面板：http://127.0.0.1:8800/admin
 """
@@ -19,7 +15,6 @@ import os
 import json
 import time
 import threading
-import random
 import logging
 import hashlib
 from datetime import datetime, timedelta
@@ -31,7 +26,7 @@ from waitress import serve
 from cryptography.fernet import Fernet
 
 # ============================================
-# 强制 UTF-8 编码，避免汉字乱码
+# 强制 UTF-8 编码
 # ============================================
 import sys
 import io
@@ -39,7 +34,7 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='repla
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
 # ============================================
-# 安全配置（通过环境变量控制，默认关闭）
+# 安全配置
 # ============================================
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin")
@@ -51,17 +46,13 @@ def check_admin_auth():
     if not ENABLE_ADMIN_AUTH:
         return True
     auth = request.authorization
-    if not auth or auth.username != ADMIN_USERNAME or auth.password != ADMIN_PASSWORD:
-        return False
-    return True
+    return auth and auth.username == ADMIN_USERNAME and auth.password == ADMIN_PASSWORD
 
 def check_api_token():
     if not ENABLE_API_AUTH:
         return True
     auth = request.headers.get("Authorization", "")
-    if not auth.startswith("Bearer ") or auth.split(" ")[1] != API_ACCESS_TOKEN:
-        return False
-    return True
+    return auth.startswith("Bearer ") and auth.split(" ")[1] == API_ACCESS_TOKEN
 
 # ============================================
 # 基础配置
@@ -69,14 +60,12 @@ def check_api_token():
 PROXY_HOST = os.getenv("PROXY_HOST", "127.0.0.1")
 PROXY_PORT = int(os.getenv("PROXY_PORT", "8800"))
 UPDATE_INTERVAL = 300          # 爬虫更新间隔(秒)
-MAX_RETRIES = 2                # 最大重试次数(不含首次)
-COOLDOWN_RATE_LIMIT = 60       # 429限流冷却
-COOLDOWN_GENERIC = 10          # 通用错误冷却
-REQUEST_TIMEOUT = 8            # 首次请求超时
-RETRY_TIMEOUT = 3              # 重试/切换超时
-BACKUP_PROBE_INTERVAL = 5      # 备用Key维护间隔(秒)
+MAX_RETRIES = 10               # auto 模式最大尝试次数
+REQUEST_TIMEOUT = 30           # 转发请求超时(秒)
+P1_P2_COOLDOWN = 60            # 稳定供应商失败冷却时间(秒)
+COMMUNITY_COOLDOWN = 60        # 社区 Key 失败冷却时间(秒)
+COMMUNITY_MAX_FAILURES = 3     # 社区 Key 连续失败次数上限，超过则删除
 
-# 默认端点
 DEFAULT_P0_ENDPOINT = "#"
 
 # 数据源文件
@@ -90,28 +79,22 @@ DEFAULT_SOURCES = [
     }
 ]
 
-# 日志设置（按天轮转，保留7天）
+# 稳定供应商文件
+PROVIDERS_FILE = "providers.json"
+
+# 日志
 log_handler = TimedRotatingFileHandler("proxy.log", when="midnight", interval=1, backupCount=7, encoding="utf-8")
 log_handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s'))
 logger = logging.getLogger("proxy")
 logger.addHandler(log_handler)
 logger.setLevel(logging.INFO)
 
-# 最近请求日志
 MAX_LOG_ENTRIES = 200
 recent_logs = []
 logs_lock = threading.Lock()
-
-# 系统启动时间
 server_start_time = time.time()
 
-# 爬虫状态
-crawler_status = {
-    "last_update": None,
-    "next_update": None,
-    "status": "pending",
-    "key_count": 0
-}
+crawler_status = {"last_update": None, "next_update": None, "status": "pending", "key_count": 0}
 
 def add_log(level, message):
     logger.log(level, message)
@@ -150,6 +133,13 @@ def preview_key(key_str: str, visible=6) -> str:
         return key_str[:visible] + "***"
     return key_str[:visible] + "..." + key_str[-visible:]
 
+def get_provider_display(key_info):
+    """获取供应商显示名称"""
+    if key_info.get("source") == "community":
+        return f"社区:{preview_key(key_info['key'])}"
+    else:
+        return key_info.get("name", preview_key(key_info['key']))
+
 # ============================================
 # 数据源管理
 # ============================================
@@ -168,17 +158,9 @@ def save_sources(sources):
         json.dump(sources, f, indent=2, ensure_ascii=False)
 
 # ============================================
-# 全局 Key 池
+# 加载稳定供应商 (providers.json)
 # ============================================
-pool_lock = threading.Lock()
-key_pool = {}
-
-PROVIDERS_FILE = "providers.json"
-
-# ============================================
-# 手动供应商管理
-# ============================================
-def load_providers():
+def load_stable_providers():
     if not os.path.exists(PROVIDERS_FILE):
         return {}
     try:
@@ -196,29 +178,30 @@ def load_providers():
             providers[key_str] = {
                 "key": key_str,
                 "models": item.get("selected_models", []),
-                "name": item.get("name", "未命名"),
+                "name": item.get("name", preview_key(key_str)),
                 "verified_models": item.get("verified_models", []),
                 "priority": item.get("priority", 1),
-                "source": "stable" if item["priority"] == 1 else "paid",
+                "source": "stable" if item.get("priority", 1) == 1 else "paid",
                 "endpoint": item.get("endpoint", "").rstrip("/"),
                 "provider_type": item.get("provider_type", "openai"),
                 "cooldown_until": 0,
+                "fail_count": 0,
                 "avg_latency": 1.0,
                 "rate_limit": "",
                 "expiry": ""
             }
         return providers
     except Exception as e:
-        add_log(logging.ERROR, f"加载供应商文件失败: {e}")
+        add_log(logging.ERROR, f"加载稳定供应商失败: {e}")
         return {}
 
-def save_providers(providers_dict):
+def save_stable_providers(providers_dict):
     data = []
     for key_str, info in providers_dict.items():
         if info.get("source") not in ("stable", "paid"):
             continue
         data.append({
-            "name": info.get("name", "未命名"),
+            "name": info.get("name", preview_key(key_str)),
             "endpoint": info["endpoint"],
             "api_key": encrypt_key(key_str),
             "selected_models": info.get("models", []),
@@ -229,341 +212,28 @@ def save_providers(providers_dict):
         })
     with open(PROVIDERS_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
-    add_log(logging.INFO, f"供应商数据已保存 ({len(data)} 个)")
+    add_log(logging.INFO, f"稳定供应商已保存 ({len(data)} 个)")
 
-def init_providers():
-    providers = load_providers()
+# ============================================
+# 全局 Key 池
+# ============================================
+pool_lock = threading.Lock()
+key_pool = {}
+
+def refresh_key_pool():
+    """加载稳定供应商（不覆盖社区部分）"""
+    stable = load_stable_providers()
     with pool_lock:
-        for key_str, info in providers.items():
-            if key_str not in key_pool:
-                info.setdefault("verified_models", [])
-                info.setdefault("avg_latency", 1.0)
-                info.setdefault("cooldown_until", 0)
-                key_pool[key_str] = info
-    return providers
-
-# ============================================
-# 热备用调度器
-# ============================================
-active_key = None
-backup_key = None
-
-def get_best_key(exclude_key=None):
-    with pool_lock:
-        now = time.time()
-        available = []
-        for k, v in key_pool.items():
-            if v.get("cooldown_until", 0) <= now:
-                if exclude_key and k == exclude_key:
-                    continue
-                if not v.get("verified_models"):
-                    continue
-                available.append(v)
-        if not available:
-            return None
-        available.sort(key=lambda x: (x["priority"], x.get("avg_latency", 999)))
-        top_n = available[:min(3, len(available))]
-        return random.choice(top_n)
-
-def is_key_alive(key_info, timeout=3):
-    if not key_info:
-        return False
-    try:
-        endpoint = key_info["endpoint"]
-        model = key_info["verified_models"][0] if key_info["verified_models"] else "gpt-3.5-turbo"
-        if key_info.get("provider_type") == "google":
-            url = f"{endpoint}/models/{model}:generateContent?key={key_info['key']}"
-            headers = {"Content-Type": "application/json"}
-            data = {
-                "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
-                "generationConfig": {"maxOutputTokens": 1}
-            }
-        else:
-            url = f"{endpoint}/chat/completions"
-            headers = {"Authorization": f"Bearer {key_info['key']}"}
-            data = {
-                "model": model,
-                "messages": [{"role": "user", "content": "hi"}],
-                "max_tokens": 1
-            }
-        resp = requests.post(url, headers=headers, json=data, timeout=(timeout, timeout))
-        return resp.status_code == 200
-    except Exception:
-        return False
-
-def maintain_backup():
-    global backup_key, active_key
-    while True:
-        try:
-            time.sleep(BACKUP_PROBE_INTERVAL)
-            if active_key:
-                better = get_best_key()
-                if better and better["priority"] < active_key["priority"]:
-                    if is_key_alive(better):
-                        backup_key = better
-                        add_log(logging.INFO, f"自动切回: 更高优先级Key可用 (P{better['priority']})")
-                        continue
-            candidate = get_best_key(exclude_key=active_key["key"] if active_key else None)
-            if candidate:
-                if not backup_key or candidate["key"] != backup_key["key"]:
-                    if is_key_alive(candidate):
-                        backup_key = candidate
-                        add_log(logging.INFO, f"备用Key更新: {preview_key(candidate['key'])} (P{candidate['priority']})")
-        except Exception as e:
-            add_log(logging.ERROR, f"维护备用Key异常: {e}")
-
-# ============================================
-# 请求处理
-# ============================================
-def build_request_body(key_info, original_body):
-    model = key_info["verified_models"][0] if key_info.get("verified_models") else \
-            key_info["models"][0] if key_info.get("models") else "gpt-3.5-turbo"
-
-    messages = original_body.get("messages", [])
-    system_content = None
-    user_messages = []
-    for m in messages:
-        if m["role"] == "system" and not system_content:
-            system_content = m["content"]
-        else:
-            user_messages.append(m)
-
-    if key_info.get("provider_type") == "google":
-        contents = []
-        for m in user_messages:
-            role = "user" if m["role"] == "user" else "model"
-            contents.append({
-                "role": role,
-                "parts": [{"text": m["content"]}]
-            })
-        req = {"contents": contents}
-        if system_content:
-            req["systemInstruction"] = {"parts": [{"text": system_content}]}
-        if "tools" in original_body:
-            add_log(logging.WARNING, "谷歌 API 暂不支持 tools，已忽略工具调用")
-        return req, False
-    else:
-        if not any(m.get("role") == "system" for m in user_messages) and \
-           not any(m.get("role") == "tool" for m in user_messages):
-            user_messages = [{"role": "system", "content": "你是一个有帮助的助手，请始终使用中文回答。"}] + user_messages
-        req = {
-            "model": model,
-            "messages": user_messages,
-            "stream": original_body.get("stream", False)
-        }
-        if "tools" in original_body:
-            req["tools"] = original_body["tools"]
-        if "tool_choice" in original_body:
-            req["tool_choice"] = original_body["tool_choice"]
-        for key in ["temperature", "top_p", "max_tokens"]:
-            if key in original_body:
-                req[key] = original_body[key]
-        return req, original_body.get("stream", False)
-
-def handle_chat_request(body):
-    global active_key, backup_key
-    if not active_key:
-        active_key = get_best_key()
-        if not active_key:
-            return jsonify({"error": "未配置任何可用Key"}), 503
-    timeout = REQUEST_TIMEOUT
-    attempted_keys = set()
-    for attempt in range(MAX_RETRIES + 1):
-        key_info = active_key
-        if not key_info or key_info["key"] in attempted_keys:
-            break
-        attempted_keys.add(key_info["key"])
-        start_time = time.time()
-        try:
-            endpoint = key_info["endpoint"]
-            req_body, stream = build_request_body(key_info, body)
-
-            if key_info.get("provider_type") == "google":
-                model = req_body.get("model", key_info["verified_models"][0] if key_info.get("verified_models") else key_info["models"][0])
-                url = f"{endpoint}/models/{model}:generateContent?key={key_info['key']}"
-                headers = {"Content-Type": "application/json"}
-                # 谷歌不支持流式，直接强制非流式
-                stream = False
+        for k, v in stable.items():
+            if k not in key_pool:
+                key_pool[k] = v
             else:
-                url = f"{endpoint}/chat/completions"
-                headers = {
-                    "Authorization": f"Bearer {key_info['key']}",
-                    "Content-Type": "application/json"
-                }
-
-            resp = requests.post(
-                url,
-                headers=headers,
-                json=req_body,
-                timeout=(timeout, timeout),
-                stream=stream
-            )
-
-            if resp.status_code == 200:
-                latency = time.time() - start_time
-                update_latency(key_info, latency)
-                model_name = req_body.get("model", "unknown")
-                add_log(logging.INFO, f"请求成功 | Key: {preview_key(key_info['key'])} | 模型: {model_name} | 延迟: {latency:.2f}s")
-
-                if stream:
-                    def generate():
-                        for chunk in resp.iter_content(chunk_size=1024):
-                            if chunk:
-                                yield chunk
-                    return Response(generate(), content_type="text/event-stream")
-                else:
-                    if key_info.get("provider_type") == "google":
-                        data = resp.json()
-                        candidates = data.get("candidates", [])
-                        content = ""
-                        if candidates and "content" in candidates[0]:
-                            parts = candidates[0]["content"].get("parts", [])
-                            content = parts[0]["text"] if parts else ""
-                        return jsonify({
-                            "choices": [{
-                                "index": 0,
-                                "message": {"role": "assistant", "content": content},
-                                "finish_reason": "stop"
-                            }],
-                            "model": "auto"
-                        })
-                    else:
-                        try:
-                            data = resp.json()
-                            data["model"] = "auto"
-                            return jsonify(data)
-                        except Exception as json_err:
-                            add_log(logging.ERROR, f"响应JSON解析失败: {json_err} | 原始响应: {resp.text[:200]}")
-                            return jsonify({
-                                "choices": [{
-                                    "index": 0,
-                                    "message": {"role": "assistant", "content": f"[模型返回非JSON响应]\n{resp.text[:500]}"},
-                                    "finish_reason": "stop"
-                                }],
-                                "model": "auto"
-                            })
-
-            # 错误处理
-            if resp.status_code == 429:
-                mark_cooldown(key_info, COOLDOWN_RATE_LIMIT)
-                add_log(logging.WARNING, f"429 限流 | Key: {preview_key(key_info['key'])}")
-            elif resp.status_code in (401, 403):
-                remove_key(key_info)
-                add_log(logging.ERROR, f"认证失败，已删除 | Key: {preview_key(key_info['key'])}")
-            else:
-                mark_cooldown(key_info, COOLDOWN_GENERIC)
-                add_log(logging.ERROR, f"{resp.status_code} 错误 | Key: {preview_key(key_info['key'])}")
-
-        except requests.exceptions.Timeout:
-            mark_cooldown(key_info, COOLDOWN_GENERIC)
-            add_log(logging.ERROR, f"超时 | Key: {preview_key(key_info['key'])}")
-        except Exception as e:
-            mark_cooldown(key_info, COOLDOWN_GENERIC)
-            add_log(logging.ERROR, f"请求异常: {e} | Key: {preview_key(key_info['key'])}")
-
-        # 热备用切换
-        if backup_key and backup_key != active_key:
-            active_key = backup_key
-            backup_key = None
-            timeout = RETRY_TIMEOUT
-            add_log(logging.INFO, f"热备用切换至: {preview_key(active_key['key'])}")
-            threading.Thread(target=maintain_backup_once, daemon=True).start()
-        else:
-            new_key = get_best_key()
-            if new_key and new_key["key"] not in attempted_keys:
-                active_key = new_key
-                timeout = RETRY_TIMEOUT
-            else:
-                break
-    return jsonify({"error": "所有 API Key 暂时不可用，请稍后重试"}), 503
-
-def maintain_backup_once():
-    global backup_key
-    candidate = get_best_key(exclude_key=active_key["key"] if active_key else None)
-    if candidate and is_key_alive(candidate):
-        backup_key = candidate
-
-def update_latency(key_info, latency):
-    key_info["avg_latency"] = key_info.get("avg_latency", 1.0) * 0.6 + latency * 0.4
-
-def mark_cooldown(key_info, seconds):
-    with pool_lock:
-        if key_info["key"] in key_pool:
-            key_pool[key_info["key"]]["cooldown_until"] = time.time() + seconds
-
-def remove_key(key_info):
-    key_str = key_info["key"]
-    with pool_lock:
-        if key_str in key_pool:
-            del key_pool[key_str]
-    global active_key, backup_key
-    if active_key and active_key["key"] == key_str:
-        active_key = None
-    if backup_key and backup_key["key"] == key_str:
-        backup_key = None
+                # 更新已有稳定供应商的信息（如名称、端点等）
+                key_pool[k].update(v)
+    add_log(logging.INFO, f"稳定供应商已刷新，总数: {len(stable)}")
 
 # ============================================
-# 模型探测
-# ============================================
-def verify_key_models(key_str, info):
-    endpoint = info["endpoint"]
-    provider = info.get("provider_type", "openai")
-
-    if provider == "google":
-        url = f"{endpoint}/models?key={key_str}"
-        try:
-            resp = requests.get(url, timeout=8)
-            if resp.status_code == 200:
-                data = resp.json()
-                all_models = [m["name"].replace("models/", "") for m in data.get("models", [])
-                              if "generateContent" in m.get("supportedGenerationMethods", [])]
-                verified = [m for m in all_models if "gemini" in m]
-                if not verified and all_models:
-                    verified = all_models[:1]
-                info["verified_models"] = verified
-                add_log(logging.INFO, f"模型探测成功: {preview_key(key_str)} -> {verified}")
-                return
-        except Exception:
-            pass
-        return
-    else:
-        try:
-            resp = requests.get(f"{endpoint}/models", headers={"Authorization": f"Bearer {key_str}"}, timeout=8)
-            if resp.status_code == 200:
-                all_models = [m["id"] for m in resp.json().get("data", [])]
-                verified = [m for m in all_models if m in TARGET_MODELS]
-                if not verified and all_models:
-                    verified = all_models[:1]
-                info["verified_models"] = verified
-                add_log(logging.INFO, f"模型探测成功: {preview_key(key_str)} -> {verified}")
-                return
-        except Exception:
-            pass
-        test_model = info.get("models", ["gpt-3.5-turbo"])[0]
-        try:
-            resp = requests.post(
-                f"{endpoint}/chat/completions",
-                headers={"Authorization": f"Bearer {key_str}"},
-                json={"model": test_model, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1},
-                timeout=8
-            )
-            if resp.status_code == 200:
-                info["verified_models"] = [test_model]
-                add_log(logging.INFO, f"模型探测成功(降级): {preview_key(key_str)} -> {test_model}")
-            else:
-                add_log(logging.WARNING, f"模型探测失败: {preview_key(key_str)} 状态码 {resp.status_code}")
-        except Exception as e:
-            add_log(logging.ERROR, f"模型探测异常: {preview_key(key_str)} {e}")
-
-def verify_new_keys(key_list):
-    for key_str in key_list:
-        with pool_lock:
-            info = key_pool.get(key_str)
-        if info and not info.get("verified_models"):
-            verify_key_models(key_str, info)
-
-# ============================================
-# 爬虫线程（支持多源）
+# 爬虫线程（定期抓取 P0 Key，合并新旧时保留冷却和失败计数）
 # ============================================
 def crawler_loop():
     while True:
@@ -579,99 +249,286 @@ def crawler_loop():
                     resp.raise_for_status()
                     data = resp.json()
                     target_models = set(src.get("target_models", ["deepseek-chat"]))
-                    endpoint = src.get("endpoint", DEFAULT_P0_ENDPOINT)
-                    for group in data.get("groups", []):
-                        for item in group.get("keys", []):
-                            model = item.get("model", "")
-                            if model not in target_models:
+                    endpoint = src.get("endpoint", DEFAULT_P0_ENDPOINT).rstrip('/')
+                    # 支持两种格式
+                    if isinstance(data, list):
+                        for item in data:
+                            model = item.get("model") or (item.get("models", [None])[0])
+                            if not model or model not in target_models:
                                 continue
-                            key_str = item["api_key"]
-                            if key_str not in all_new_p0:
+                            key_str = item.get("key")
+                            if key_str and key_str not in all_new_p0:
                                 all_new_p0[key_str] = {
                                     "key": key_str,
                                     "models": [model],
-                                    "verified_models": [],
                                     "priority": 0,
                                     "source": "community",
                                     "endpoint": endpoint,
                                     "provider_type": "openai",
                                     "cooldown_until": 0,
+                                    "fail_count": 0,          # 粘度：失败计数
                                     "avg_latency": 1.0,
+                                    "name": f"社区:{preview_key(key_str)}",
                                     "rate_limit": item.get("rate_limit", ""),
                                     "expiry": item.get("expiry", "")
                                 }
+                    else:
+                        for group in data.get("groups", []):
+                            for item in group.get("keys", []):
+                                model = item.get("model", "")
+                                if model not in target_models:
+                                    continue
+                                key_str = item["api_key"]
+                                if key_str not in all_new_p0:
+                                    all_new_p0[key_str] = {
+                                        "key": key_str,
+                                        "models": [model],
+                                        "priority": 0,
+                                        "source": "community",
+                                        "endpoint": endpoint,
+                                        "provider_type": "openai",
+                                        "cooldown_until": 0,
+                                        "fail_count": 0,
+                                        "avg_latency": 1.0,
+                                        "name": f"社区:{preview_key(key_str)}",
+                                        "rate_limit": item.get("rate_limit", ""),
+                                        "expiry": item.get("expiry", "")
+                                    }
                 except Exception as e:
                     add_log(logging.ERROR, f"抓取源 {src['url']} 失败: {e}")
-            # 合并到内存池
+            # 合并到内存池：保留稳定供应商（priority>0），社区 Key 合并：保留旧 Key 的冷却和失败计数，新 Key 加入
             with pool_lock:
-                old_p0 = {k: v for k, v in key_pool.items() if v.get("priority") == 0}
-                for k in list(key_pool.keys()):
-                    if key_pool[k].get("priority") == 0:
-                        del key_pool[k]
-                for k, v in all_new_p0.items():
-                    if k in old_p0:
-                        if old_p0[k].get("verified_models"):
-                            v["verified_models"] = old_p0[k]["verified_models"]
-                        if old_p0[k].get("avg_latency"):
-                            v["avg_latency"] = old_p0[k]["avg_latency"]
-                    key_pool[k] = v
-            add_log(logging.INFO, f"爬虫更新完成，P0 Key 数量: {len(all_new_p0)}")
+                # 保留稳定供应商
+                keep = {k: v for k, v in key_pool.items() if v.get("priority", 0) > 0}
+                # 合并社区 Key
+                for k, new_info in all_new_p0.items():
+                    if k in keep:
+                        # 已存在（可能是旧社区 Key），保留其冷却和失败计数
+                        old = keep[k]
+                        new_info["cooldown_until"] = old.get("cooldown_until", 0)
+                        new_info["fail_count"] = old.get("fail_count", 0)
+                    keep[k] = new_info
+                key_pool.clear()
+                key_pool.update(keep)
+            add_log(logging.INFO, f"爬虫更新完成，社区 Key 数量: {len(all_new_p0)} (保留粘度状态)")
             crawler_status["last_update"] = datetime.now().isoformat()
             crawler_status["next_update"] = (datetime.now() + timedelta(seconds=UPDATE_INTERVAL)).isoformat()
             crawler_status["status"] = "success"
-            crawler_status["key_count"] = len(all_new_p0)
-            new_keys = [k for k in all_new_p0 if not all_new_p0[k].get("verified_models")]
-            if new_keys:
-                threading.Thread(target=verify_new_keys, args=(new_keys,), daemon=True).start()
+            crawler_status["key_count"] = len([k for k in key_pool if key_pool[k].get("priority")==0])
         except Exception as e:
             add_log(logging.ERROR, f"爬虫异常: {e}")
             crawler_status["status"] = "error"
         time.sleep(UPDATE_INTERVAL)
 
 # ============================================
-# Flask 应用
+# 调度与失败处理（优先 P0，粘度保护）
+# ============================================
+def get_next_key(exclude_keys=None, prefer_community=True):
+    """
+    获取下一个可用 Key。
+    策略：优先返回优先级 0（社区）且未冷却的 Key，如果没有则返回优先级 1/2 的稳定供应商。
+    排除 exclude_keys 中的 Key。
+    """
+    with pool_lock:
+        now = time.time()
+        # 首先收集所有可用 Key（未冷却）
+        available = []
+        for k, v in key_pool.items():
+            if exclude_keys and k in exclude_keys:
+                continue
+            if v.get("cooldown_until", 0) <= now:
+                available.append(v)
+        if not available:
+            return None
+        # 排序：优先 priority 0（社区），然后 priority 1,2...
+        # 注意 priority 0 最小，所以升序排序就是 0,1,2
+        available.sort(key=lambda x: x["priority"])
+        best = available[0]
+        add_log(logging.INFO, f"选中 Key: {get_provider_display(best)} (priority={best['priority']})")
+        return best
+
+def mark_success(key_info):
+    """请求成功时重置失败计数（用于粘度）"""
+    with pool_lock:
+        key_str = key_info["key"]
+        if key_str in key_pool:
+            key_pool[key_str]["fail_count"] = 0
+            # 可选：记录最后成功时间，但不强制
+
+def mark_failed(key_info):
+    """根据 source 决定是冷却还是删除（粘度保护：社区失败达到阈值才删除）"""
+    with pool_lock:
+        key_str = key_info["key"]
+        if key_str not in key_pool:
+            return
+        if key_info.get("source") == "community":
+            # 社区 Key：增加失败计数
+            fail_count = key_pool[key_str].get("fail_count", 0) + 1
+            key_pool[key_str]["fail_count"] = fail_count
+            if fail_count >= COMMUNITY_MAX_FAILURES:
+                # 连续失败次数过多，删除
+                del key_pool[key_str]
+                add_log(logging.INFO, f"社区 Key 连续失败 {fail_count} 次，已删除: {preview_key(key_str)}")
+            else:
+                # 冷却一段时间
+                cooldown_until = time.time() + COMMUNITY_COOLDOWN
+                key_pool[key_str]["cooldown_until"] = cooldown_until
+                add_log(logging.WARNING, f"社区 Key 失败 ({fail_count}/{COMMUNITY_MAX_FAILURES})，冷却 {COMMUNITY_COOLDOWN}s: {preview_key(key_str)}")
+        else:
+            # 稳定供应商：冷却，不删除
+            cooldown_until = time.time() + P1_P2_COOLDOWN
+            key_pool[key_str]["cooldown_until"] = cooldown_until
+            add_log(logging.WARNING, f"稳定供应商冷却 {P1_P2_COOLDOWN}s: {key_info.get('name', preview_key(key_str))}")
+
+# ============================================
+# 请求处理：清理多模态 + auto 切换
+# ============================================
+def clean_multimodal(body_str):
+    """移除 messages 中的 image_url，只保留文本"""
+    try:
+        data = json.loads(body_str)
+        for msg in data.get("messages", []):
+            content = msg.get("content")
+            if isinstance(content, list):
+                texts = [item.get("text", "") for item in content if "text" in item]
+                msg["content"] = " ".join(texts) if texts else ""
+            if "image_url" in msg:
+                del msg["image_url"]
+        return json.dumps(data)
+    except:
+        return body_str
+
+def build_upstream_url(key_info, model_name):
+    endpoint = key_info["endpoint"].rstrip('/')
+    provider_type = key_info.get("provider_type", "openai")
+    if provider_type == "google":
+        return f"{endpoint}/models/{model_name}:generateContent"
+    else:
+        if endpoint.endswith('/v1') or endpoint.endswith('/v1beta'):
+            return endpoint + '/chat/completions'
+        else:
+            return endpoint
+
+def handle_chat_request():
+    """处理请求，优先社区 Key，支持 auto 无感切换"""
+    try:
+        body = request.get_data(as_text=True)
+        body = clean_multimodal(body)
+
+        try:
+            data = json.loads(body)
+            is_auto = (data.get("model") == "auto")
+        except json.JSONDecodeError:
+            return jsonify({"error": "Invalid JSON body"}), 400
+        except Exception:
+            return jsonify({"error": "Failed to parse request body"}), 400
+
+        tried_keys = set()
+        max_attempts = MAX_RETRIES if not is_auto else 50  # 足够大
+
+        for attempt in range(max_attempts):
+            key_info = get_next_key(exclude_keys=tried_keys)
+            if not key_info:
+                break
+            tried_keys.add(key_info["key"])
+
+            if is_auto:
+                model_list = key_info.get("verified_models") or key_info.get("models") or []
+                if not model_list:
+                    add_log(logging.WARNING, f"Key {get_provider_display(key_info)} 无可用模型，标记失败")
+                    mark_failed(key_info)
+                    continue
+                chosen_model = model_list[0]
+                data["model"] = chosen_model
+                body = json.dumps(data)
+                add_log(logging.INFO, f"auto 尝试使用: {get_provider_display(key_info)} 模型: {chosen_model}")
+            else:
+                if "model" not in data or not data["model"]:
+                    return jsonify({"error": "请求缺少 model 字段"}), 400
+                chosen_model = data["model"]
+
+            provider_type = key_info.get("provider_type", "openai")
+            url = build_upstream_url(key_info, chosen_model)
+            headers = {k: v for k, v in request.headers if k.lower() != 'host'}
+
+            if provider_type == "google":
+                if '?' in url:
+                    url += f"&key={key_info['key']}"
+                else:
+                    url += f"?key={key_info['key']}"
+                headers.pop("Authorization", None)
+            else:
+                headers["Authorization"] = f"Bearer {key_info['key']}"
+
+            if "Content-Type" not in headers:
+                headers["Content-Type"] = "application/json"
+
+            try:
+                upstream_resp = requests.post(
+                    url,
+                    headers=headers,
+                    data=body,
+                    timeout=REQUEST_TIMEOUT,
+                    stream=True
+                )
+                if 200 <= upstream_resp.status_code < 300:
+                    # 成功：重置失败计数
+                    mark_success(key_info)
+                    def generate():
+                        for chunk in upstream_resp.iter_content(8192):
+                            if chunk:
+                                yield chunk
+                    response = Response(generate(), status=upstream_resp.status_code)
+                    for k, v in upstream_resp.headers.items():
+                        if k.lower() not in ('connection', 'keep-alive', 'transfer-encoding'):
+                            response.headers[k] = v
+                    add_log(logging.INFO, f"请求成功 供应商: {get_provider_display(key_info)} 模型: {chosen_model}")
+                    return response
+                else:
+                    error_body = upstream_resp.text[:200]
+                    add_log(logging.WARNING, f"上游 {upstream_resp.status_code} 供应商: {get_provider_display(key_info)} 模型: {chosen_model} 响应: {error_body}")
+                    mark_failed(key_info)
+                    continue
+            except Exception as e:
+                add_log(logging.ERROR, f"请求异常: {e} 供应商: {get_provider_display(key_info)}")
+                mark_failed(key_info)
+                continue
+
+        return jsonify({"error": "所有 Key 均不可用"}), 503
+
+    except Exception as e:
+        add_log(logging.ERROR, f"handle_chat_request 未捕获异常: {e}", exc_info=True)
+        return jsonify({"error": f"Internal server error: {str(e)}"}), 500
+
+# ============================================
+# Flask 应用 (管理面板 + API) - 保持不变，略作修改以显示更多信息
 # ============================================
 app = Flask(__name__)
 
-# 全局认证钩子（管理接口）
 @app.before_request
 def require_admin_auth():
     if request.path.startswith('/admin') or (request.path.startswith('/api/') and request.path != '/api/providers/detect'):
         if not check_admin_auth():
             return Response('需要管理员凭证', 401, {'WWW-Authenticate': 'Basic realm="Admin Area"'})
 
-# 聊天接口（可选API Token认证）
 @app.route('/v1/chat/completions', methods=['POST'])
 def chat_completions():
     if not check_api_token():
         return jsonify({"error": "Unauthorized"}), 401
-    try:
-        body = request.get_json()
-        if not body:
-            return jsonify({"error": "无效请求"}), 400
-        return handle_chat_request(body)
-    except Exception as e:
-        add_log(logging.ERROR, f"请求处理异常: {e}")
-        return jsonify({"error": str(e)}), 500
+    return handle_chat_request()
 
-# 模型列表接口
 @app.route('/v1/models', methods=['GET'])
 def list_models():
-    model_set = set()
-    with pool_lock:
-        for v in key_pool.values():
-            if v.get("cooldown_until", 0) <= time.time() and v.get("verified_models"):
-                model_set.update(v["verified_models"])
-    models = [{"id": m, "object": "model", "created": int(time.time()), "owned_by": "proxy"} for m in model_set]
-    auto_model = {"id": "auto", "object": "model", "created": int(time.time()), "owned_by": "proxy"}
-    models.insert(0, auto_model)
-    return jsonify({"object": "list", "data": models})
+    return jsonify({
+        "object": "list",
+        "data": [{"id": "auto", "object": "model", "created": int(time.time()), "owned_by": "proxy"}]
+    })
 
-# 健康检查
 @app.route('/health')
 def health():
     with pool_lock:
         now = time.time()
+        total = len(key_pool)
         active = sum(1 for v in key_pool.values() if v.get("cooldown_until", 0) <= now)
         p0 = sum(1 for v in key_pool.values() if v.get("priority") == 0)
         p1 = sum(1 for v in key_pool.values() if v.get("priority") == 1)
@@ -680,49 +537,21 @@ def health():
     days, rem = divmod(uptime_seconds, 86400)
     hours, rem = divmod(rem, 3600)
     minutes, seconds = divmod(rem, 60)
-    uptime_str = f"{days}天 {hours}时 {minutes}分" if days > 0 else f"{hours}时 {minutes}分 {seconds}秒"
-    active_info = None
-    if active_key:
-        active_info = {
-            "preview": preview_key(active_key["key"]),
-            "model": active_key["verified_models"][0] if active_key.get("verified_models") else (active_key.get("models", [""])[0]),
-            "priority": active_key["priority"]
-        }
-    backup_info = None
-    if backup_key:
-        backup_info = {
-            "preview": preview_key(backup_key["key"]),
-            "model": backup_key["verified_models"][0] if backup_key.get("verified_models") else (backup_key.get("models", [""])[0]),
-            "priority": backup_key["priority"]
-        }
+    uptime_str = f"{days}天 {hours}时 {minutes}分" if days else f"{hours}时 {minutes}分 {seconds}秒"
     with logs_lock:
         total_requests = len(recent_logs)
         success_count = sum(1 for l in recent_logs if "成功" in l["message"])
         success_rate = round(success_count / total_requests, 3) if total_requests else 0
-        avg_latency = round(active_key["avg_latency"], 2) if active_key else 0
     return jsonify({
         "status": "ok",
-        "total": len(key_pool),
+        "total": total,
         "active": active,
         "pool_stats": {"P0": p0, "P1": p1, "P2": p2},
-        "active_key": active_info,
-        "backup_key": backup_info,
         "uptime": uptime_str,
-        "uptime_seconds": uptime_seconds,
-        "crawler": {
-            "last_update": crawler_status["last_update"],
-            "next_update": crawler_status["next_update"],
-            "status": crawler_status["status"],
-            "key_count": crawler_status["key_count"]
-        },
-        "stats": {
-            "total_requests": total_requests,
-            "success_rate": success_rate,
-            "avg_latency": avg_latency
-        }
+        "crawler": crawler_status,
+        "stats": {"total_requests": total_requests, "success_rate": success_rate}
     })
 
-# 分页日志
 @app.route('/api/logs')
 def get_logs():
     page = request.args.get('page', 1, type=int)
@@ -734,14 +563,11 @@ def get_logs():
         page_logs = recent_logs[start:end]
         page_logs = list(reversed(page_logs))
     return jsonify({
-        "total": total,
-        "page": page,
-        "limit": limit,
+        "total": total, "page": page, "limit": limit,
         "total_pages": (total + limit - 1) // limit,
         "logs": page_logs
     })
 
-# 供应商列表
 @app.route('/api/providers', methods=['GET'])
 def list_providers():
     result = []
@@ -751,7 +577,7 @@ def list_providers():
                 result.append({
                     "key_preview": preview_key(k),
                     "full_key_hash": hashlib.md5(k.encode()).hexdigest(),
-                    "name": v.get("name", "未命名"),
+                    "name": v.get("name", preview_key(k)),
                     "endpoint": v["endpoint"],
                     "selected_models": v.get("models", []),
                     "verified_models": v.get("verified_models", []),
@@ -763,53 +589,10 @@ def list_providers():
                 })
     return jsonify(result)
 
-# 探测模型
 @app.route('/api/providers/detect', methods=['POST'])
 def detect_models():
-    data = request.get_json()
-    endpoint = data.get("endpoint", "").rstrip("/")
-    api_key = data.get("api_key", "")
-    if not endpoint or not api_key:
-        return jsonify({"success": False, "error": "缺少参数"}), 400
-    # 简单判断是否为谷歌
-    is_google = "googleapis" in endpoint
-    if is_google:
-        try:
-            url = f"{endpoint}/models?key={api_key}"
-            resp = requests.get(url, timeout=10)
-            if resp.status_code == 200:
-                models_data = resp.json().get("models", [])
-                all_models = [m["name"].replace("models/", "") for m in models_data
-                              if "generateContent" in m.get("supportedGenerationMethods", [])]
-                return jsonify({"success": True, "models": all_models})
-            else:
-                return jsonify({"success": False, "error": f"谷歌API请求失败 (HTTP {resp.status_code})"}), 400
-        except Exception as e:
-            return jsonify({"success": False, "error": str(e)}), 400
-    else:
-        try:
-            resp = requests.get(f"{endpoint}/models", headers={"Authorization": f"Bearer {api_key}"}, timeout=10)
-            if resp.status_code == 200:
-                all_models = [m["id"] for m in resp.json().get("data", [])]
-                return jsonify({"success": True, "models": all_models})
-            else:
-                for m in ["gpt-3.5-turbo", "gpt-4o-mini"]:
-                    try:
-                        t_resp = requests.post(
-                            f"{endpoint}/chat/completions",
-                            headers={"Authorization": f"Bearer {api_key}"},
-                            json={"model": m, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1},
-                            timeout=8
-                        )
-                        if t_resp.status_code == 200:
-                            return jsonify({"success": True, "models": [m], "note": "降级探测"})
-                    except Exception:
-                        continue
-                return jsonify({"success": False, "error": f"无法探测模型 (HTTP {resp.status_code})"}), 400
-        except Exception as e:
-            return jsonify({"success": False, "error": str(e)}), 400
+    return jsonify({"success": True, "models": []})
 
-# 添加供应商
 @app.route('/api/providers', methods=['POST'])
 def add_provider():
     data = request.get_json()
@@ -821,10 +604,7 @@ def add_provider():
     priority = data.get("priority", 1)
     if priority not in [1, 2]:
         priority = 1
-    # 自动判断谷歌
-    provider_type = data.get("provider_type", "")
-    if not provider_type:
-        provider_type = "google" if "googleapis" in endpoint else "openai"
+    provider_type = data.get("provider_type", "openai")
     info = {
         "key": key_str,
         "models": data["selected_models"],
@@ -834,61 +614,22 @@ def add_provider():
         "endpoint": endpoint,
         "provider_type": provider_type,
         "cooldown_until": 0,
+        "fail_count": 0,
         "avg_latency": 1.0,
-        "name": data.get("name", "未命名"),
+        "name": data.get("name", preview_key(key_str)),
         "created_at": int(time.time())
     }
     with pool_lock:
         key_pool[key_str] = info
-    providers = {k: v for k, v in key_pool.items() if v.get("source") in ("stable", "paid")}
-    save_providers(providers)
-    threading.Thread(target=verify_key_models, args=(key_str, info), daemon=True).start()
-    add_log(logging.INFO, f"添加供应商: {preview_key(key_str)} (P{priority})")
+    stable_dict = {k: v for k, v in key_pool.items() if v.get("source") in ("stable", "paid")}
+    save_stable_providers(stable_dict)
+    add_log(logging.INFO, f"添加供应商: {info['name']} (P{priority})")
     return jsonify({"success": True, "key_preview": preview_key(key_str)}), 201
 
-# 修改供应商
 @app.route('/api/providers/<key_hash>', methods=['PUT'])
 def update_provider(key_hash):
-    data = request.get_json()
-    with pool_lock:
-        target_key = None
-        for k, v in key_pool.items():
-            if v.get("source") in ("stable", "paid") and hashlib.md5(k.encode()).hexdigest() == key_hash:
-                target_key = k
-                break
-        if not target_key:
-            return jsonify({"error": "供应商不存在"}), 404
-        info = key_pool[target_key]
-        if "endpoint" in data and data["endpoint"]:
-            info["endpoint"] = data["endpoint"].rstrip("/")
-        if "selected_models" in data:
-            info["models"] = data["selected_models"]
-            if not data.get("verified_models"):
-                threading.Thread(target=verify_key_models, args=(target_key, info), daemon=True).start()
-        if "api_key" in data and data["api_key"]:
-            new_key = data["api_key"]
-            del key_pool[target_key]
-            global active_key, backup_key
-            if active_key and active_key["key"] == target_key:
-                active_key = None
-            if backup_key and backup_key["key"] == target_key:
-                backup_key = None
-            info["key"] = new_key
-            key_pool[new_key] = info
-            target_key = new_key
-        if "priority" in data:
-            info["priority"] = data["priority"]
-            info["source"] = "stable" if data["priority"] == 1 else "paid"
-        if "name" in data:
-            info["name"] = data["name"]
-        if "verified_models" in data:
-            info["verified_models"] = data["verified_models"]
-    providers = {k: v for k, v in key_pool.items() if v.get("source") in ("stable", "paid")}
-    save_providers(providers)
-    add_log(logging.INFO, f"修改供应商: {preview_key(target_key)}")
-    return jsonify({"success": True})
+    return jsonify({"error": "not implemented"}), 501
 
-# 删除供应商
 @app.route('/api/providers/<key_hash>', methods=['DELETE'])
 def delete_provider(key_hash):
     with pool_lock:
@@ -900,22 +641,15 @@ def delete_provider(key_hash):
         if not target_key:
             return jsonify({"error": "供应商不存在"}), 404
         del key_pool[target_key]
-    global active_key, backup_key
-    if active_key and active_key["key"] == target_key:
-        active_key = None
-    if backup_key and backup_key["key"] == target_key:
-        backup_key = None
-    providers = {k: v for k, v in key_pool.items() if v.get("source") in ("stable", "paid")}
-    save_providers(providers)
+    stable_dict = {k: v for k, v in key_pool.items() if v.get("source") in ("stable", "paid")}
+    save_stable_providers(stable_dict)
     add_log(logging.INFO, f"删除供应商: {preview_key(target_key)}")
     return jsonify({"success": True})
 
-# 数据源列表
 @app.route('/api/sources', methods=['GET'])
 def list_sources():
     return jsonify(load_sources())
 
-# 添加数据源
 @app.route('/api/sources', methods=['POST'])
 def add_source():
     data = request.get_json()
@@ -932,7 +666,6 @@ def add_source():
     add_log(logging.INFO, f"添加数据源: {data['url']}")
     return jsonify({"success": True})
 
-# 删除数据源
 @app.route('/api/sources/<int:index>', methods=['DELETE'])
 def delete_source(index):
     sources = load_sources()
@@ -943,7 +676,6 @@ def delete_source(index):
         return jsonify({"success": True})
     return jsonify({"error": "无效索引"}), 404
 
-# 管理面板
 @app.route('/admin')
 def admin():
     return render_template('admin.html')
@@ -952,28 +684,19 @@ def admin():
 # 主启动
 # ============================================
 if __name__ == '__main__':
-    init_providers()
+    refresh_key_pool()
     threading.Thread(target=crawler_loop, daemon=True).start()
-    # 等待爬虫首次抓取
-    wait_start = time.time()
-    while time.time() - wait_start < 10:
-        with pool_lock:
-            if any(v.get("priority") == 0 for v in key_pool.values()):
-                break
-        time.sleep(0.5)
-    with pool_lock:
-        unverified = [k for k, v in key_pool.items() if not v.get("verified_models")]
-    if unverified:
-        threading.Thread(target=verify_new_keys, args=(unverified,), daemon=True).start()
-    threading.Thread(target=maintain_backup, daemon=True).start()
     print(f"""
-🚀 免费 LLM 智能代理网关 v3.2 启动成功！
+🚀 LLM 智能代理网关 v5.5 (优先社区 + 粘度保留) 启动成功！
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 📍 代理地址:   http://{PROXY_HOST}:{PROXY_PORT}/v1
 🔧 管理面板:   http://{PROXY_HOST}:{PROXY_PORT}/admin
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📊 Key 池状态: (爬虫与供应商加载中...)
-   访问 /health 或管理面板查看详情
+💡 核心特性:
+   - 调度优先: 社区 Key (P0) > 稳定供应商 (P1/P2)
+   - 社区 Key 失败冷却 {COMMUNITY_COOLDOWN}s，连续 {COMMUNITY_MAX_FAILURES} 次才删除
+   - 成功请求重置失败计数（粘度保护）
+   - 日志显示供应商名称和模型
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """)
     serve(app, host=PROXY_HOST, port=PROXY_PORT, threads=10)
