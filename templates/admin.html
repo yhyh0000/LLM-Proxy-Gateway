@@ -78,8 +78,6 @@
         .card:hover {
             box-shadow: var(--shadow-hover);
         }
-
-        /* 接入接口美化 */
         .api-wrap {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -107,16 +105,12 @@
             padding-top: 12px;
             border-top: 1px dashed var(--border);
         }
-
-        /* 状态卡片 */
         .status-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
             gap: 16px;
             margin-bottom: 20px;
         }
-
-        /* 按钮 */
         .btn {
             background: var(--primary);
             color: #fff;
@@ -152,8 +146,6 @@
             margin-bottom: 16px;
             flex-wrap: wrap;
         }
-
-        /* 表格 + 超长文本美化 */
         .table-box { overflow-x: auto; }
         table {
             width: 100%;
@@ -171,8 +163,6 @@
             background: rgba(0,0,0,0.02);
         }
         tr:hover { background: rgba(66,133,244,0.03); }
-        
-        /* 超长文本自动省略 + hover 浮层显示完整 */
         .text-ellipsis {
             max-width: 220px;
             white-space: nowrap;
@@ -197,7 +187,6 @@
             max-width: 400px;
             box-shadow: 0 4px 10px rgba(0,0,0,0.15);
         }
-
         .status-dot {
             display: inline-block;
             width: 9px;
@@ -205,8 +194,6 @@
             border-radius: 50%;
             margin-right: 5px;
         }
-
-        /* 日志 */
         .logs-box {
             background: var(--card);
             border-radius: var(--radius);
@@ -224,9 +211,7 @@
             margin-top: 12px;
             flex-wrap: wrap;
         }
-
-        /* 模态框 */
-        .modal {
+        .modal, .model-select-modal {
             display: none;
             position: fixed;
             inset: 0;
@@ -282,15 +267,59 @@
             z-index: 999;
             font-size: 14px;
         }
-        .model-checkboxes {
-            max-height: 140px;
-            overflow-y: auto;
-            margin: 8px 0;
+        .model-tags {
             display: flex;
-            flex-direction: column;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin: 8px 0;
+            min-height: 40px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 8px;
+            background: var(--bg);
+        }
+        .model-tag {
+            background: var(--primary-light);
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 12px;
+            display: inline-flex;
+            align-items: center;
             gap: 6px;
         }
-
+        .model-tag .remove-tag {
+            cursor: pointer;
+            color: var(--red);
+            font-weight: bold;
+            margin-left: 4px;
+        }
+        .add-model-row {
+            display: flex;
+            gap: 8px;
+            margin-top: 8px;
+        }
+        .add-model-row input {
+            flex: 1;
+        }
+        .log-auto-refresh {
+            margin-left: 10px;
+            font-size: 13px;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+        }
+        .model-checkbox-list {
+            max-height: 300px;
+            overflow-y: auto;
+            margin: 10px 0;
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 8px;
+        }
+        .model-checkbox-list label {
+            display: block;
+            margin: 4px 0;
+        }
         @media (max-width: 768px) {
             body { padding: 16px; }
             .api-wrap { grid-template-columns: 1fr; }
@@ -302,59 +331,30 @@
 <div class="container">
     <div class="page-head">
         <h1 class="page-title">API 代理管理面板</h1>
-        <p class="page-desc">v3.1 · 运行时间: <span id="uptime">--</span></p>
+        <p class="page-desc">v3.5 · 运行时间: <span id="uptime">--</span></p>
     </div>
 
-    <!-- 接入接口 -->
     <div class="card">
         <h2 class="section-title">接入接口</h2>
         <div class="api-wrap">
-            <div class="api-item">
-                <div class="api-path">/v1/chat/completions</div>
-                <div class="api-desc">聊天补全 OpenAI 兼容</div>
-            </div>
-            <div class="api-item">
-                <div class="api-path">/v1/models</div>
-                <div class="api-desc">获取模型列表</div>
-            </div>
-            <div class="api-item">
-                <div class="api-path">/health</div>
-                <div class="api-desc">服务健康状态检测</div>
-            </div>
-            <div class="api-item">
-                <div class="api-path">/admin</div>
-                <div class="api-desc">后台管理面板</div>
-            </div>
+            <div class="api-item"><div class="api-path">/v1/chat/completions</div><div class="api-desc">聊天补全 OpenAI 兼容</div></div>
+            <div class="api-item"><div class="api-path">/v1/models</div><div class="api-desc">获取模型列表</div></div>
+            <div class="api-item"><div class="api-path">/health</div><div class="api-desc">服务健康状态检测</div></div>
+            <div class="api-item"><div class="api-path">/admin</div><div class="api-desc">后台管理面板</div></div>
         </div>
         <div class="base-url-info">基础访问地址：<span id="baseURL"></span></div>
     </div>
 
-    <!-- 状态卡片 -->
     <div class="status-grid" id="statusCards"></div>
 
-    <!-- 🔴 改名：密钥采集源 + 超长URL美化 -->
     <div class="card">
         <h2 class="section-title">密钥采集源</h2>
-        <div class="btn-group">
-            <button class="btn" onclick="openSourceModal()">+ 添加采集源</button>
-        </div>
+        <div class="btn-group"><button class="btn" onclick="openSourceModal()">+ 添加采集源</button></div>
         <div class="table-box">
-            <table>
-                <thead>
-                    <tr>
-                        <th>名称</th>
-                        <th>采集地址</th>
-                        <th>目标模型</th>
-                        <th>API 端点</th>
-                        <th>操作</th>
-                    </tr>
-                </thead>
-                <tbody id="sourcesTable"></tbody>
-            </table>
+            <table><thead><tr><th>名称</th><th>采集地址</th><th>目标模型</th><th>API 端点</th><th>操作</th></tr></thead><tbody id="sourcesTable"></tbody></table>
         </div>
     </div>
 
-    <!-- 供应商 -->
     <div class="card">
         <h2 class="section-title">供应商列表</h2>
         <div class="btn-group">
@@ -362,39 +362,44 @@
             <button class="btn btn-outline" onclick="refreshAll()">刷新数据</button>
         </div>
         <div class="table-box">
-            <table>
-                <thead>
-                    <tr>
-                        <th>名称</th>
-                        <th>优先级</th>
-                        <th>响应延迟</th>
-                        <th>运行状态</th>
-                        <th>操作</th>
-                    </tr>
-                </thead>
-                <tbody id="providerTable"></tbody>
-            </table>
+            <table><thead><tr><th>名称</th><th>优先级</th><th>响应延迟</th><th>运行状态</th><th>操作</th></tr></thead><tbody id="providerTable"></tbody></table>
         </div>
     </div>
 
-    <!-- 日志 -->
     <div class="card">
         <h2 class="section-title">最近运行日志</h2>
+        <div class="btn-group">
+            <button class="btn btn-sm" onclick="loadLogs(currentLogPage)">刷新日志</button>
+            <label class="log-auto-refresh"><input type="checkbox" id="autoRefreshLog"> 自动刷新 (3秒)</label>
+        </div>
         <div class="logs-box" id="logs"></div>
         <div class="pagination" id="logPagination"></div>
     </div>
 </div>
 
-<!-- 模态框 -->
+<!-- 供应商模态框 -->
 <div class="modal" id="providerModal">
     <div class="modal-content">
         <h2 id="modalTitle" style="margin-bottom:16px;font-size:18px;">添加供应商</h2>
         <input type="text" id="provName" placeholder="供应商名称">
         <input type="text" id="provEndpoint" placeholder="API端点 例：https://api.example.com/v1">
         <input type="password" id="provKey" placeholder="API Key">
+        <select id="provType">
+            <option value="openai">OpenAI 兼容</option>
+            <option value="google">Google Gemini</option>
+            <option value="cloudflare">Cloudflare Workers AI</option>
+        </select>
         <button class="btn" onclick="detectModels()" id="detectBtn">探测可用模型</button>
         <div id="detectResult"></div>
-        <div class="model-checkboxes" id="modelCheckboxes"></div>
+        <div class="form-group">
+            <label>模型列表:</label>
+            <div id="modelTags" class="model-tags"></div>
+            <div class="add-model-row">
+                <input type="text" id="newModelName" placeholder="输入模型名称，例如 openai/gpt-4o-mini">
+                <button type="button" class="btn btn-sm" onclick="addModelTagFromInput()">添加</button>
+            </div>
+            <small style="color: var(--text-3);">支持任意文本，可手动输入模型名称</small>
+        </div>
         <select id="provPriority">
             <option value="1">P1 - 官方免费</option>
             <option value="2">P2 - 付费兜底</option>
@@ -407,6 +412,21 @@
     </div>
 </div>
 
+<!-- 模型选择对话框（探测结果） -->
+<div class="model-select-modal" id="modelSelectModal">
+    <div class="modal-content">
+        <h3 style="margin-bottom:16px;">选择模型</h3>
+        <div id="modelSelectList" class="model-checkbox-list"></div>
+        <div class="btn-group" style="justify-content: space-between;">
+            <button class="btn btn-sm" onclick="selectAllModels(true)">全选</button>
+            <button class="btn btn-sm" onclick="selectAllModels(false)">清空</button>
+            <button class="btn btn-sm" onclick="addSelectedModels()">添加选中模型</button>
+            <button class="btn btn-outline btn-sm" onclick="closeModelSelectModal()">取消</button>
+        </div>
+    </div>
+</div>
+
+<!-- 采集源模态框 -->
 <div class="modal" id="sourceModal">
     <div class="modal-content">
         <h2 style="margin-bottom:16px;font-size:18px;">添加采集源</h2>
@@ -424,20 +444,211 @@
 <div class="toast" id="toast"></div>
 
 <script>
-let allModels = [];
-let selectedModels = [];
+// ========== 全局变量 ==========
+let currentEditHash = null;
 let currentLogPage = 1;
 const logsPerPage = 50;
+let autoRefreshTimer = null;
+let pendingModels = [];          // 存储探测到的模型列表（供模态框使用）
 
-function showToast(msg, duration=3000) {
+// ========== 工具函数 ==========
+function showToast(msg, duration=4000) {
     const t = document.getElementById('toast');
     t.textContent = msg;
     t.style.display = 'block';
     setTimeout(() => t.style.display = 'none', duration);
 }
 
-document.getElementById('baseURL').textContent = window.location.origin;
+function escapeHtml(str) {
+    if (str === undefined || str === null) return '';
+    return String(str).replace(/[&<>]/g, function(m) {
+        if (m === '&') return '&amp;';
+        if (m === '<') return '&lt;';
+        if (m === '>') return '&gt;';
+        return m;
+    });
+}
 
+// ========== 模型标签管理 ==========
+function addModelTag(modelName) {
+    if (!modelName || typeof modelName !== 'string') return;
+    const container = document.getElementById('modelTags');
+    if (!container) return;
+    const tag = document.createElement('div');
+    tag.className = 'model-tag';
+    tag.innerHTML = `${escapeHtml(modelName)} <span class="remove-tag" onclick="this.parentElement.remove()">✖</span>`;
+    container.appendChild(tag);
+}
+
+function addModelTagFromInput() {
+    const input = document.getElementById('newModelName');
+    if (!input) return;
+    const modelName = input.value.trim();
+    if (modelName === '') return;
+    addModelTag(modelName);
+    input.value = '';
+}
+
+function getModelsFromTags() {
+    const tags = document.querySelectorAll('#modelTags .model-tag');
+    return Array.from(tags).map(tag => {
+        let text = tag.innerText.replace('✖', '').trim();
+        return text;
+    });
+}
+
+function renderModelTagsFromArray(models) {
+    const container = document.getElementById('modelTags');
+    container.innerHTML = '';
+    if (models && Array.isArray(models)) {
+        models.forEach(model => { if (model) addModelTag(model); });
+    }
+}
+
+// ========== 模型选择对话框 ==========
+function closeModelSelectModal() {
+    document.getElementById('modelSelectModal').style.display = 'none';
+}
+
+function selectAllModels(selectAll) {
+    const checkboxes = document.querySelectorAll('#modelSelectList input[type="checkbox"]');
+    checkboxes.forEach(cb => cb.checked = selectAll);
+}
+
+function addSelectedModels() {
+    const checkboxes = document.querySelectorAll('#modelSelectList input[type="checkbox"]:checked');
+    const selected = Array.from(checkboxes).map(cb => cb.value);
+    if (selected.length === 0) {
+        showToast('未选择任何模型');
+        return;
+    }
+    selected.forEach(model => addModelTag(model));
+    closeModelSelectModal();
+    showToast(`已添加 ${selected.length} 个模型`);
+}
+
+// 过滤模型（根据供应商类型和端点）
+function filterModelsByProvider(models, providerType, endpoint) {
+    if (!models || !Array.isArray(models)) return [];
+    // 根据常见的供应商特征进行过滤
+    if (providerType === 'google') {
+        // Google 模型通常以 gemini- 开头
+        return models.filter(m => m.startsWith('gemini-'));
+    } else if (providerType === 'cloudflare') {
+        // Cloudflare 模型以 @cf/ 开头
+        return models.filter(m => m.startsWith('@cf/'));
+    } else {
+        // OpenAI 兼容类型：根据 endpoint 判断
+        if (endpoint.includes('nvidia') || endpoint.includes('integrate.api.nvidia.com')) {
+            // 英伟达只保留 nvidia/ 开头的模型
+            return models.filter(m => m.startsWith('nvidia/'));
+        } else if (endpoint.includes('github') || endpoint.includes('models.github.ai')) {
+            // GitHub 保留 openai/ 或 meta/ 等（通用）
+            return models.filter(m => m.startsWith('openai/') || m.startsWith('meta/') || m.startsWith('anthropic/'));
+        } else if (endpoint.includes('deepseek')) {
+            // DeepSeek 保留 deepseek- 开头的
+            return models.filter(m => m.startsWith('deepseek-'));
+        } else {
+            // 默认返回所有，但去除明显异常的（如空字符串）
+            return models.filter(m => m && typeof m === 'string' && m.length > 0);
+        }
+    }
+}
+
+// ========== 探测模型 ==========
+async function detectModels() {
+    if (currentEditHash) {
+        // 编辑模式：使用已保存的供应商信息探测
+        const btn = document.getElementById('detectBtn');
+        btn.disabled = true;
+        btn.innerHTML = '<span class="loading"></span> 探测中';
+        try {
+            const res = await fetch(`/api/providers/detect/${currentEditHash}`, { method: 'POST' });
+            const data = await res.json();
+            if (data.success && data.models && Array.isArray(data.models)) {
+                // 获取当前供应商的类型和端点（从编辑的表单中获取）
+                const providerType = document.getElementById('provType').value;
+                const endpoint = document.getElementById('provEndpoint').value.trim();
+                const filtered = filterModelsByProvider(data.models, providerType, endpoint);
+                if (filtered.length === 0) {
+                    showToast('未探测到有效模型（已过滤）');
+                    document.getElementById('detectResult').innerHTML = `探测到 ${data.models.length} 个模型，过滤后无有效模型`;
+                } else {
+                    pendingModels = filtered;
+                    // 显示选择对话框
+                    const listDiv = document.getElementById('modelSelectList');
+                    listDiv.innerHTML = '';
+                    filtered.forEach(model => {
+                        const label = document.createElement('label');
+                        label.innerHTML = `<input type="checkbox" value="${escapeHtml(model)}"> ${escapeHtml(model)}`;
+                        listDiv.appendChild(label);
+                    });
+                    document.getElementById('modelSelectModal').style.display = 'flex';
+                    document.getElementById('detectResult').innerHTML = `探测到 ${data.models.length} 个模型，过滤后 ${filtered.length} 个有效`;
+                }
+            } else {
+                document.getElementById('detectResult').innerHTML = `探测失败：${data.error || '未知错误'}`;
+            }
+        } catch(e) {
+            showToast('接口请求异常');
+        }
+        btn.disabled = false;
+        btn.innerHTML = '探测可用模型';
+        return;
+    }
+
+    // 新增模式
+    const providerType = document.getElementById('provType').value;
+    const endpoint = document.getElementById('provEndpoint').value.trim();
+    const api_key = document.getElementById('provKey').value.trim();
+
+    if (providerType === 'cloudflare') {
+        showToast('Cloudflare Workers AI 暂不支持自动探测，请手动填写模型名');
+        return;
+    }
+    if (!endpoint || !api_key) {
+        showToast('请填写接口地址与密钥');
+        return;
+    }
+
+    const btn = document.getElementById('detectBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="loading"></span> 探测中';
+    try {
+        const res = await fetch('/api/providers/detect', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({endpoint, api_key, provider_type: providerType})
+        });
+        const data = await res.json();
+        if (data.success && data.models && Array.isArray(data.models)) {
+            const filtered = filterModelsByProvider(data.models, providerType, endpoint);
+            if (filtered.length === 0) {
+                showToast('未探测到有效模型（已过滤）');
+                document.getElementById('detectResult').innerHTML = `探测到 ${data.models.length} 个模型，过滤后无有效模型`;
+            } else {
+                pendingModels = filtered;
+                const listDiv = document.getElementById('modelSelectList');
+                listDiv.innerHTML = '';
+                filtered.forEach(model => {
+                    const label = document.createElement('label');
+                    label.innerHTML = `<input type="checkbox" value="${escapeHtml(model)}"> ${escapeHtml(model)}`;
+                    listDiv.appendChild(label);
+                });
+                document.getElementById('modelSelectModal').style.display = 'flex';
+                document.getElementById('detectResult').innerHTML = `探测到 ${data.models.length} 个模型，过滤后 ${filtered.length} 个有效`;
+            }
+        } else {
+            document.getElementById('detectResult').innerHTML = `探测失败：${data.error || '未知错误'}`;
+        }
+    } catch(e) {
+        showToast('接口请求异常');
+    }
+    btn.disabled = false;
+    btn.innerHTML = '探测可用模型';
+}
+
+// ========== 数据加载 ==========
 async function refreshAll() {
     await Promise.all([loadHealth(), loadSources(), loadProviders(), loadLogs(currentLogPage)]);
 }
@@ -446,46 +657,30 @@ async function loadHealth() {
     const res = await fetch('/health');
     const data = await res.json();
     document.getElementById('uptime').textContent = data.uptime;
-
     let html = '';
     html += `<div class="card"><div style="font-size:22px;font-weight:700;margin-bottom:4px;">${data.pool_stats.P0}</div><div style="font-size:13px;color:var(--text-2)">P0 中转 Key</div></div>`;
     html += `<div class="card"><div style="font-size:22px;font-weight:700;margin-bottom:4px;">${data.pool_stats.P1}</div><div style="font-size:13px;color:var(--text-2)">P1 免费 Key</div></div>`;
     html += `<div class="card"><div style="font-size:22px;font-weight:700;margin-bottom:4px;">${data.pool_stats.P2}</div><div style="font-size:13px;color:var(--text-2)">P2 付费 Key</div></div>`;
     html += `<div class="card"><div style="font-size:22px;font-weight:700;color:var(--green);margin-bottom:4px;">${data.active}</div><div style="font-size:13px;color:var(--text-2)">活跃可用 Key</div></div>`;
-
-    if (data.active_key) {
-        html += `<div class="card"><div style="font-weight:600;margin-bottom:4px;">当前使用密钥</div><div style="font-size:13px;color:var(--text-2)">${data.active_key.preview} · ${data.active_key.model}</div></div>`;
-    }
-    if (data.backup_key) {
-        html += `<div class="card"><div style="font-weight:600;margin-bottom:4px;">备用密钥</div><div style="font-size:13px;color:var(--text-2)">${data.backup_key.preview} · ${data.backup_key.model}</div></div>`;
-    }
-
+    if (data.active_key) html += `<div class="card"><div style="font-weight:600;margin-bottom:4px;">当前使用密钥</div><div style="font-size:13px;color:var(--text-2)">${data.active_key.preview} · ${data.active_key.model}</div></div>`;
+    if (data.backup_key) html += `<div class="card"><div style="font-weight:600;margin-bottom:4px;">备用密钥</div><div style="font-size:13px;color:var(--text-2)">${data.backup_key.preview} · ${data.backup_key.model}</div></div>`;
     const crawler = data.crawler;
     if (crawler.last_update) {
         const last = new Date(crawler.last_update).toLocaleTimeString();
         const next = crawler.next_update ? new Date(crawler.next_update).toLocaleTimeString() : '--';
         html += `<div class="card"><div style="font-weight:600;margin-bottom:4px;">爬虫抓取状态</div><div style="font-size:13px;color:var(--text-2)">上次更新:${last}<br>下次更新:${next}<br>可用密钥:${crawler.key_count}</div></div>`;
     }
-
     const stats = data.stats;
     html += `<div class="card"><div style="font-weight:600;margin-bottom:4px;">请求统计</div><div style="font-size:13px;color:var(--text-2)">总请求:${stats.total_requests}<br>成功率:${(stats.success_rate*100).toFixed(1)}%<br>平均延迟:${stats.avg_latency}s</div></div>`;
-
     document.getElementById('statusCards').innerHTML = html;
 }
 
-// 🔴 美化：采集源表格（超长URL自动省略 + hover浮层）
 async function loadSources() {
     const res = await fetch('/api/sources');
     const sources = await res.json();
     let html = '';
     sources.forEach((s, i) => {
-        html += `<tr>
-            <td><strong>${s.name || '未命名'}</strong></td>
-            <td><div class="text-ellipsis" data-full="${s.url}">${s.url}</div></td>
-            <td>${s.target_models.join(', ')}</td>
-            <td><div class="text-ellipsis" data-full="${s.endpoint}">${s.endpoint}</div></td>
-            <td><button class="btn btn-danger btn-sm" onclick="deleteSource(${i})">删除</button></td>
-        </tr>`;
+        html += `<tr><td><strong>${escapeHtml(s.name || '未命名')}</strong></td><td><div class="text-ellipsis" data-full="${escapeHtml(s.url)}">${escapeHtml(s.url)}</div></td><td>${s.target_models.join(', ')}</td><td><div class="text-ellipsis" data-full="${escapeHtml(s.endpoint)}">${escapeHtml(s.endpoint)}</div></td><td><button class="btn btn-danger btn-sm" onclick="deleteSource(${i})">删除</button></td></tr>`;
     });
     document.getElementById('sourcesTable').innerHTML = html || '<tr><td colspan="5" style="text-align:center;color:var(--text-3)">暂无采集源</td></tr>';
 }
@@ -497,94 +692,72 @@ async function loadProviders() {
     data.forEach(p => {
         const statusColor = p.status === 'active' ? 'var(--green)' : (p.cooldown > 0 ? 'var(--yellow)' : 'var(--red)');
         const statusText = p.status === 'active' ? '在线' : (p.cooldown > 0 ? '冷却中' : '已失效');
-        html += `<tr>
-            <td>${p.name || '未命名'}</td>
-            <td>P${p.priority}</td>
-            <td>${p.avg_latency}s</td>
-            <td><span class="status-dot" style="background:${statusColor}"></span>${statusText}</td>
-            <td><button class="btn btn-sm" onclick="editProvider('${p.full_key_hash}')">编辑</button></td>
-        </tr>`;
+        html += `<tr><td>${escapeHtml(p.name || '未命名')}</td><td>P${p.priority}</td><td>${p.avg_latency}s</td><td><span class="status-dot" style="background:${statusColor}"></span>${statusText}</td><td><button class="btn btn-sm" onclick="testProvider('${p.full_key_hash}', event)">测试</button><button class="btn btn-sm" onclick="editProvider('${p.full_key_hash}')">编辑</button></td></tr>`;
     });
     document.getElementById('providerTable').innerHTML = html || '<tr><td colspan="5" style="text-align:center;color:var(--text-3)">暂无供应商</td></tr>';
 }
 
+async function testProvider(hash, event) {
+    const btn = event.target;
+    const originalText = btn.innerText;
+    btn.innerText = '测试中...';
+    btn.disabled = true;
+    try {
+        const res = await fetch(`/api/providers/test/${hash}`, { method: 'POST' });
+        const data = await res.json();
+        if (data.success) {
+            showToast(`✅ 测试成功 | 状态码 ${data.status_code} | 延迟 ${data.latency_ms}ms | 响应: ${data.response_preview || 'OK'}`);
+        } else {
+            showToast(`❌ 测试失败 | 状态码 ${data.status_code || '无'} | 错误: ${data.error || '未知错误'}`);
+        }
+    } catch (err) {
+        showToast('测试请求异常: ' + err.message);
+    } finally {
+        btn.innerText = originalText;
+        btn.disabled = false;
+        await loadProviders();
+        await loadHealth();
+    }
+}
+
 async function loadLogs(page) {
-    const res = await fetch(`/api/logs?page=${page}&limit=${logsPerPage}`);
+    currentLogPage = page;
+    const limit = logsPerPage;
+    const res = await fetch(`/api/logs?page=${page}&limit=${limit}`);
     const data = await res.json();
     let html = '';
     data.logs.forEach(l => {
         const color = l.level === 'ERROR' ? 'var(--red)' : (l.level === 'WARNING' ? 'var(--yellow)' : 'var(--green)');
-        html += `<div style="color:${color};margin-bottom:3px;">[${l.time.slice(11,19)}] ${l.message}</div>`;
+        html += `<div style="color:${color};margin-bottom:3px;">[${l.time.slice(11,19)}] ${escapeHtml(l.message)}</div>`;
     });
     document.getElementById('logs').innerHTML = html || '暂无运行日志';
-
     let paginationHtml = '';
     for (let i = 1; i <= data.total_pages; i++) {
         paginationHtml += `<button class="btn btn-outline btn-sm" onclick="loadLogs(${i})" ${i === page ? 'disabled' : ''}>${i}</button>`;
     }
     document.getElementById('logPagination').innerHTML = paginationHtml;
-    currentLogPage = page;
 }
 
+// ========== 供应商保存/编辑/删除 ==========
 function closeModal() {
     document.getElementById('providerModal').style.display = 'none';
+    currentEditHash = null;
+    document.getElementById('provKey').value = '';
 }
 
 function openAddModal() {
+    currentEditHash = null;
     document.getElementById('modalTitle').textContent = '添加供应商';
     document.getElementById('editHash').value = '';
     document.getElementById('provName').value = '';
     document.getElementById('provEndpoint').value = '';
     document.getElementById('provKey').value = '';
+    document.getElementById('provType').value = 'openai';
     document.getElementById('provPriority').value = '1';
     document.getElementById('detectResult').innerHTML = '';
-    document.getElementById('modelCheckboxes').innerHTML = '';
-    allModels = []; selectedModels = [];
+    document.getElementById('modelTags').innerHTML = '';
+    document.getElementById('newModelName').value = '';
     document.getElementById('providerModal').style.display = 'flex';
-}
-
-async function detectModels() {
-    const endpoint = document.getElementById('provEndpoint').value.trim();
-    const key = document.getElementById('provKey').value.trim();
-    if (!endpoint || !key) { showToast('请填写接口地址与密钥'); return; }
-    const btn = document.getElementById('detectBtn');
-    btn.disabled = true;
-    btn.innerHTML = '<span class="loading"></span> 探测中';
-    try {
-        const res = await fetch('/api/providers/detect', {
-            method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({endpoint, api_key: key})
-        });
-        const data = await res.json();
-        if (data.success) {
-            allModels = data.models;
-            document.getElementById('detectResult').innerHTML = `成功探测到 ${allModels.length} 个可用模型`;
-            renderModelCheckboxes();
-        } else {
-            document.getElementById('detectResult').innerHTML = `探测失败：${data.error}`;
-        }
-    } catch(e) { showToast('接口请求异常'); }
-    btn.disabled = false;
-    btn.innerHTML = '探测可用模型';
-}
-
-function renderModelCheckboxes() {
-    let html = '';
-    allModels.forEach(m => {
-        const checked = selectedModels.includes(m) ? 'checked' : '';
-        html += `<label style="cursor:pointer;"><input type="checkbox" value="${m}" ${checked} onchange="updateSelected()"> ${m}</label>`;
-    });
-    document.getElementById('modelCheckboxes').innerHTML = html;
-}
-
-function updateSelected() {
-    const checks = document.querySelectorAll('#modelCheckboxes input:checked');
-    selectedModels = Array.from(checks).map(c => c.value);
-    if (selectedModels.length > 2) {
-        checks[2].checked = false;
-        selectedModels = selectedModels.slice(0,2);
-        showToast('最多仅可选择2个模型');
-    }
 }
 
 async function saveProvider() {
@@ -592,14 +765,16 @@ async function saveProvider() {
     const endpoint = document.getElementById('provEndpoint').value.trim();
     const api_key = document.getElementById('provKey').value.trim();
     const priority = parseInt(document.getElementById('provPriority').value);
+    const providerType = document.getElementById('provType').value;
     const editHash = document.getElementById('editHash').value;
+    const selectedModels = getModelsFromTags();
 
     if (!editHash) {
         if (!endpoint || !api_key) { showToast('接口地址和密钥不能为空'); return; }
-        if (selectedModels.length === 0) { showToast('请选择至少一个可用模型'); return; }
+        if (selectedModels.length === 0) { showToast('请至少添加一个模型'); return; }
     }
 
-    const body = { name, priority };
+    const body = { name, priority, provider_type: providerType };
     if (endpoint) body.endpoint = endpoint;
     if (api_key) body.api_key = api_key;
     if (selectedModels.length > 0) body.selected_models = selectedModels;
@@ -620,6 +795,7 @@ async function saveProvider() {
 }
 
 async function editProvider(hash) {
+    currentEditHash = hash;
     const res = await fetch('/api/providers');
     const data = await res.json();
     const p = data.find(d => d.full_key_hash === hash);
@@ -629,21 +805,15 @@ async function editProvider(hash) {
     document.getElementById('provName').value = p.name || '';
     document.getElementById('provEndpoint').value = p.endpoint || '';
     document.getElementById('provKey').value = '';
+    document.getElementById('provType').value = p.provider_type || 'openai';
     document.getElementById('provPriority').value = p.priority;
     document.getElementById('detectResult').innerHTML = '';
-    allModels = p.verified_models.length ? p.verified_models : p.selected_models;
-    selectedModels = [...allModels];
-    renderModelCheckboxes();
+    const models = (p.selected_models && Array.isArray(p.selected_models)) ? p.selected_models : (p.verified_models || []);
+    renderModelTagsFromArray(models);
     document.getElementById('providerModal').style.display = 'flex';
 }
 
-async function deleteProvider(hash) {
-    if (!confirm('确认删除该供应商？')) return;
-    await fetch(`/api/providers/${hash}`, { method: 'DELETE' });
-    showToast('已删除供应商');
-    refreshAll();
-}
-
+// ========== 采集源管理 ==========
 function openSourceModal() {
     document.getElementById('sourceName').value = '';
     document.getElementById('sourceUrl').value = '';
@@ -651,11 +821,7 @@ function openSourceModal() {
     document.getElementById('sourceEndpoint').value = 'https://aiapiv2.pekpik.com/v1';
     document.getElementById('sourceModal').style.display = 'flex';
 }
-
-function closeSourceModal() {
-    document.getElementById('sourceModal').style.display = 'none';
-}
-
+function closeSourceModal() { document.getElementById('sourceModal').style.display = 'none'; }
 async function saveSource() {
     const url = document.getElementById('sourceUrl').value.trim();
     if (!url) { showToast('接口URL不能为空'); return; }
@@ -666,11 +832,7 @@ async function saveSource() {
         endpoint: document.getElementById('sourceEndpoint').value.trim() || 'https://aiapiv2.pekpik.com/v1'
     };
     try {
-        const res = await fetch('/api/sources', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify(body)
-        });
+        const res = await fetch('/api/sources', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
         if (res.ok) {
             showToast('采集源添加成功');
             closeSourceModal();
@@ -681,7 +843,6 @@ async function saveSource() {
         }
     } catch(e) { showToast('请求异常'); }
 }
-
 async function deleteSource(index) {
     if (!confirm('确认删除该采集源？')) return;
     await fetch(`/api/sources/${index}`, { method: 'DELETE' });
@@ -689,8 +850,23 @@ async function deleteSource(index) {
     loadSources();
 }
 
-setInterval(refreshAll, 10000);
+// ========== 日志自动刷新 ==========
+function setupAutoRefresh() {
+    const checkbox = document.getElementById('autoRefreshLog');
+    checkbox.addEventListener('change', (e) => {
+        if (e.target.checked) {
+            if (autoRefreshTimer) clearInterval(autoRefreshTimer);
+            autoRefreshTimer = setInterval(() => { loadLogs(currentLogPage); }, 3000);
+        } else {
+            if (autoRefreshTimer) { clearInterval(autoRefreshTimer); autoRefreshTimer = null; }
+        }
+    });
+}
+
+// ========== 页面初始化 ==========
+document.getElementById('baseURL').textContent = window.location.origin;
 refreshAll();
+setupAutoRefresh();
 </script>
 </body>
 </html>
